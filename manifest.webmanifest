@@ -1,0 +1,12 @@
+{
+  "name": "Pulguea",
+  "short_name": "Pulguea",
+  "description": "Segunda mano en Puerto Rico, con entrega hoy mismo.",
+  "lang": "es",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#F7F5FA",
+  "theme_color": "#FF5A4E",
+  "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}
