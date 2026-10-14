@@ -2,6 +2,8 @@ import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js
 import { SUPABASE_URL, SUPABASE_KEY, TEST_MODE } from "./config.js";
 import { SECTIONS, SIZE_GROUPS, CONDS, COLORS, MATERIALS, BRANDS, PARCELS, GENDER_GROUPS, ALL_LEAVES, sectionName, sectionKey, nodeAt, childrenAt, isLeaf, sizeGroupsFor } from "./catalog.js";
 
+// Guardamos el link con el que se abrió la app ANTES de que Supabase lo lea y lo borre
+const START_HASH = location.hash;
 const sb = createClient(SUPABASE_URL, SUPABASE_KEY, {
   auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true, flowType: "implicit" },
 });
@@ -1625,13 +1627,26 @@ async function auth() {
 }
 async function newPassword() {
   if (!session) { location.hash = "#/entrar"; return; }
-  app.innerHTML = `${header()}<form class="panel" id="np"><span class="label">Crea tu contraseña nueva</span>
-    <input id="np1" type="password" autocomplete="new-password" placeholder="Al menos 6 caracteres"><button class="btn primary">Guardar contraseña</button></form>`;
+  app.innerHTML = `${header()}<form class="panel" id="np" novalidate>
+    <h2 style="font-size:20px">Crea tu contraseña nueva</h2>
+    <span class="small">Para la cuenta ${esc(session.user.email)}</span>
+    <div class="field"><label for="np1">Contraseña nueva</label><input id="np1" type="password" autocomplete="new-password" placeholder="Al menos 6 caracteres"></div>
+    <div class="field"><label for="np2">Escríbela otra vez</label><input id="np2" type="password" autocomplete="new-password"></div>
+    <label class="small" style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="npshow" style="width:auto"> Ver contraseña</label>
+    <button class="btn primary">Guardar contraseña</button></form>`;
+  setTimeout(() => $("#np1")?.focus(), 80);
+  app.onchange = (e) => { if (e.target.id === "npshow") ["#np1", "#np2"].forEach((k) => ($(k).type = e.target.checked ? "text" : "password")); };
   app.onsubmit = (e) => {
     e.preventDefault();
     const p = $("#np1").value;
     if (p.length < 6) return toast("La contraseña tiene que tener al menos 6 caracteres.");
-    busy(e.target.querySelector("button"), async () => { const { error } = await sb.auth.updateUser({ password: p }); if (error) throw error; toast("Contraseña cambiada."); location.hash = "#/"; });
+    if (p !== $("#np2").value) return toast("Las dos contraseñas no son iguales.");
+    busy(e.target.querySelector("button.btn"), async () => {
+      const { error } = await sb.auth.updateUser({ password: p });
+      if (error) throw /different from the old/i.test(error.message) ? new Error("Escoge una contraseña diferente a la anterior.") : error;
+      toast("¡Listo! Tu contraseña se cambió.");
+      location.hash = "#/";
+    });
   };
 }
 
@@ -1639,6 +1654,13 @@ async function newPassword() {
 (async () => {
   const { data } = await sb.auth.getSession();
   session = data.session;
+  const fromRecovery = /type=recovery/.test(START_HASH);
+  const linkErr = /error_description=([^&]+)/.exec(START_HASH);
+  if (fromRecovery && session) history.replaceState(null, "", location.pathname + "#/clave");
+  else if (linkErr) {
+    history.replaceState(null, "", location.pathname + "#/entrar");
+    setTimeout(() => toast(/expired|invalid/i.test(decodeURIComponent(linkErr[1])) ? "Ese enlace ya expiró o ya se usó. Pide otro desde Entrar." : "No se pudo abrir el enlace. Pide otro desde Entrar."), 300);
+  }
   await Promise.all([loadMe(), loadFavs(), loadPrefs(), loadFollowing()]);
   let recovering = false;
   sb.auth.onAuthStateChange((ev, s) => {
