@@ -213,3 +213,48 @@ body.nonav .app{padding-bottom:120px}
 .faq[open] summary::after{content:"−"}
 .faq div{padding:0 0 12px;color:var(--muted);line-height:1.5}
 b.plus{color:var(--ok)}b.pend{color:var(--muted)}
+/* vender estilo Vinted */
+.sellhead{position:sticky;top:0;z-index:5;display:grid;grid-template-columns:44px 1fr 44px;align-items:center;margin:0 -16px;padding:10px 8px;background:var(--bg);border-bottom:1px solid var(--line)}
+.sellhead b{text-align:center;font-size:17px}
+.iconbtn{display:grid;place-items:center;width:40px;height:40px;border:0;background:none;color:var(--ink);font-size:22px;text-decoration:none;border-radius:50%}
+.iconbtn:active{background:var(--sea-soft)}
+.sellform{display:grid;gap:10px;padding:6px 0 24px}
+.sh{font-size:17px;margin:14px 0 2px}
+.dropzone{border:2px dashed var(--line);border-radius:12px;padding:28px 14px;display:grid;justify-items:center;gap:10px;text-align:center}
+.dropzone.has{border-style:solid;border-width:1px;padding:10px;justify-items:stretch}
+.upbtn{position:relative;display:inline-flex;align-items:center;gap:6px;border:1.5px solid var(--sea);color:var(--sea);font-weight:700;border-radius:8px;padding:10px 16px;cursor:pointer}
+.upbtn input{position:absolute;inset:0;opacity:0;cursor:pointer;width:100%}
+.ph .cover{position:absolute;left:0;right:0;bottom:0;background:rgba(0,0,0,.55);color:#fff;font-size:11px;font-weight:700;text-align:center;padding:2px 0}
+.vrows{display:grid;gap:8px}
+.vrow{display:flex;align-items:center;gap:10px;width:100%;padding:14px 12px;border:1px solid var(--line);border-radius:8px;background:var(--surface);color:var(--ink);text-align:left;font-weight:600}
+.vrow>span:first-child{flex:none}
+.vrow .val{flex:1;min-width:0;text-align:right;color:var(--muted);font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.vrow:active{background:var(--sea-soft)}
+.sheet.tall{height:86vh}
+.searchbox.inset{background:var(--surface)}
+.sheetnav:empty{display:none}
+.sheetnav .iconbtn{width:auto;height:auto;font-size:15px;font-weight:700;color:var(--sea);padding:4px 0}
+.sheetnav .iconbtn::after{content:" Atrás"}
+.infobox{background:var(--sea-soft);border-radius:10px;padding:10px 12px;font-size:14px;color:var(--ink)}
+.sgroup{display:grid;gap:8px;margin-top:6px}
+.sizegrid.two{grid-template-columns:repeat(2,minmax(0,1fr))}
+.sizebtn{padding:11px 6px;border:1px solid var(--line);border-radius:8px;background:var(--surface);color:var(--ink);font-weight:600}
+.sizebtn[aria-pressed="true"]{border-color:var(--sea);background:var(--sea-soft)}
+em.rec{display:inline-block;font-style:normal;font-size:11px;font-weight:700;color:#fff;background:var(--ok);border-radius:999px;padding:2px 8px;margin-bottom:4px}
+.optrow b{display:block}
+.pricebox{display:flex;align-items:center;gap:6px;border:1.5px solid var(--sea);border-radius:12px;padding:6px 14px;font-size:28px;font-weight:800}
+.pricebox input{border:0;background:none;font-size:28px;font-weight:800;padding:6px 0;width:100%}
+.pricebox input:focus-visible{outline:none}
+/* personalización */
+.pagehero{padding:18px 0 14px;display:grid;gap:4px}
+.pagehero h2{font-size:24px}
+.flatrows{margin:0 -16px;border-top:1px solid var(--line);background:var(--surface)}
+.flatrows .rowbtn{padding:16px}
+.rowbtn.gender{border-bottom:0;padding-bottom:6px}
+.rowbtn.sub{color:var(--muted)}
+.grouplabel{padding:22px 16px 8px;color:var(--muted);font-size:14px;background:var(--bg)}
+.cbox{flex:none;width:26px;height:26px;border:1.5px solid var(--muted);border-radius:7px;display:grid;place-items:center;font-weight:800;color:#fff;font-size:15px}
+.cbox.on{background:var(--sea);border-color:var(--sea);color:var(--surface)}
+.mi.accent{color:var(--sea)}
+[hidden]{display:none!important}
+.sheetnav .iconbtn{display:inline-flex;align-items:center;gap:2px;border-radius:6px}

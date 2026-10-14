@@ -1,6 +1,6 @@
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/+esm";
 import { SUPABASE_URL, SUPABASE_KEY, TEST_MODE } from "./config.js";
-import { SECTIONS, SIZES, CONDS, COLORS, MATERIALS, BRANDS, sectionName, sizeTypeFor } from "./catalog.js";
+import { SECTIONS, SIZE_GROUPS, CONDS, COLORS, MATERIALS, BRANDS, PARCELS, GENDER_GROUPS, ALL_LEAVES, sectionName, sectionKey, nodeAt, childrenAt, isLeaf, sizeGroupsFor } from "./catalog.js";
 
 const sb = createClient(SUPABASE_URL, SUPABASE_KEY, {
   auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true, flowType: "implicit" },
@@ -14,11 +14,14 @@ const r2 = (n) => Math.round(n * 100 + 1e-6) / 100;
 const money = (n) => "$" + Number(n).toFixed(2);
 const fee = (p) => r2(Number(p) * 0.05 + 0.7);
 const withFee = (p) => r2(Number(p) + fee(p));
-const SHIP = 4.5;
+const shipFor = (code) => (PARCELS.find((x) => x[0] === code) || PARCELS[1])[3];
+const EDIT = `<svg class="chev" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M14 6l4 4"/></svg>`;
+const PLUS = `<svg class="chev" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>`;
+const catLabel = (l) => (l.cat_path?.length ? l.cat_path.slice(-2).join(" › ") : [sectionName(l.section), l.subcategory].filter(Boolean).join(" › "));
 const BUNDLE_OFF = 0.1;
 const photoUrl = (p) => `${SUPABASE_URL}/storage/v1/object/public/fotos/${p}`;
 const uid = () => session?.user?.id;
-const LIST_COLS = "id,title,price,size,brand,section,subcategory,cond,condition,town,photos,status,fav_count,seller_id";
+const LIST_COLS = "id,title,price,size,brand,section,subcategory,cat_path,parcel,cond,condition,town,photos,status,fav_count,seller_id";
 const FEED_COLS = LIST_COLS + ",seller:profiles!listings_seller_id_fkey!inner(vacation)";
 const TOWNS = ["Adjuntas","Aguada","Aguadilla","Aguas Buenas","Aibonito","Añasco","Arecibo","Arroyo","Barceloneta","Barranquitas","Bayamón","Cabo Rojo","Caguas","Camuy","Canóvanas","Carolina","Cataño","Cayey","Ceiba","Ciales","Cidra","Coamo","Comerío","Corozal","Culebra","Dorado","Fajardo","Florida","Guánica","Guayama","Guayanilla","Guaynabo","Gurabo","Hatillo","Hormigueros","Humacao","Isabela","Jayuya","Juana Díaz","Juncos","Lajas","Lares","Las Marías","Las Piedras","Loíza","Luquillo","Manatí","Maricao","Maunabo","Mayagüez","Moca","Morovis","Naguabo","Naranjito","Orocovis","Patillas","Peñuelas","Ponce","Quebradillas","Rincón","Río Grande","Sabana Grande","Salinas","San Germán","San Juan","San Lorenzo","San Sebastián","Santa Isabel","Toa Alta","Toa Baja","Trujillo Alto","Utuado","Vega Alta","Vega Baja","Vieques","Villalba","Yabucoa","Yauco"];
 const PAYNAME = { apple: "Apple Pay", google: "Google Pay", card: "tarjeta" };
@@ -76,6 +79,28 @@ const skelGrid = (n = 6) => Array.from({ length: n }, () => `<div class="skel sk
 
 /* ---------- favoritos ---------- */
 let favs = new Set();
+/* ---------- preferencias (Personalización) ---------- */
+let prefs = { genders: [], sizes: [], brands: [] };
+async function loadPrefs() {
+  prefs = { genders: [], sizes: [], brands: [] };
+  if (!session) return;
+  const { data } = await sb.from("user_prefs").select("genders,sizes,brands").eq("user_id", uid()).maybeSingle();
+  if (data) prefs = data;
+}
+async function savePrefs() {
+  const { error } = await sb.from("user_prefs").upsert({ user_id: uid(), ...prefs, updated_at: new Date().toISOString() });
+  if (error) fail(error);
+}
+const rawSizes = () => [...new Set(prefs.sizes.map((x) => x.slice(x.indexOf(":") + 1)))];
+const hasPrefs = () => !!(prefs.genders.length || prefs.sizes.length || prefs.brands.length);
+const pgList = (arr) => arr.map((x) => `"${String(x).replace(/["\\]/g, "")}"`).join(",");
+function applyMine(q, { sizes = true, genders = false, brands = false } = {}) {
+  if (genders && prefs.genders.length) q = q.in("section", prefs.genders);
+  if (sizes && prefs.sizes.length) q = q.or(`size.in.(${pgList(rawSizes())}),size.is.null`);
+  if (brands && prefs.brands.length) q = q.in("brand", prefs.brands);
+  return q;
+}
+
 async function loadFavs() {
   favs = new Set();
   if (!session) return;
@@ -179,12 +204,16 @@ const routes = [
   [/^#\/perfil$/, profile],
   [/^#\/perfil\/editar$/, editProfile],
   [/^#\/billetera$/, wallet],
+  [/^#\/personalizar$/, persMain, true],
+  [/^#\/personalizar\/tallas$/, persSizes, true],
+  [/^#\/personalizar\/tallas\/(\w+)$/, persSizeGroup, true],
+  [/^#\/personalizar\/marcas$/, persBrands, true],
   [/^#\/ajustes$/, settings],
   [/^#\/u\/([\w-]+)$/, publicProfile],
   [/^#\/entrar$/, auth],
   [/^#\/clave$/, newPassword],
 ];
-const NAVKEY = { "#/": "home", "#/buscar": "search", "#/mensajes": "inbox", "#/vender": "sell", "#/perfil": "profile", "#/pedidos": "profile", "#/pedido": "profile", "#/favoritos": "profile", "#/billetera": "profile", "#/ajustes": "profile", "#/lote": "home", "#/u": "home" };
+const NAVKEY = { "#/": "home", "#/buscar": "search", "#/mensajes": "inbox", "#/vender": "sell", "#/perfil": "profile", "#/pedidos": "profile", "#/pedido": "profile", "#/favoritos": "profile", "#/personalizar": "profile", "#/billetera": "profile", "#/ajustes": "profile", "#/lote": "home", "#/u": "home" };
 let renderId = 0;
 let cleanups = [];
 const stale = (id) => id !== renderId;
@@ -219,14 +248,13 @@ async function route() {
 
 /* ---------- inicio ---------- */
 let homeSection = null;
-const hasPrefs = () => { const p = getPrefs(); return !!(p.sections?.length || p.town); };
 async function home(id) {
   if (homeSection === null) homeSection = hasPrefs() ? "parati" : "";
   app.innerHTML = header(`
     <a class="searchbox" href="#/buscar">${SEARCH}<span>Buscar artículos o marcas</span></a>
     <div class="tabsline" id="secs">${hasPrefs() ? `<button data-s="parati" aria-pressed="${homeSection === "parati"}">Para ti</button>` : ""}<button data-s="" aria-pressed="${!homeSection}">Todo</button>${SECTIONS.map((s) => `<button data-s="${s.k}" aria-pressed="${homeSection === s.k}">${s.n}</button>`).join("")}</div>`) + `
     <div class="banner"><div>Recógelo <b>hoy</b> en persona. Pagas en la app y el vendedor solo cobra cuando escanea tu código.</div></div>
-    <div class="row" style="margin-bottom:10px"><h3 style="font-size:18px">${homeSection === "parati" ? "Para ti" : "Novedades"}</h3>${homeSection && homeSection !== "parati" ? `<a class="small" href="#/buscar?s=${homeSection}">Filtrar ›</a>` : ""}</div>
+    <div class="row" style="margin-bottom:10px"><h3 style="font-size:18px">${homeSection === "parati" ? "Para ti" : "Novedades"}</h3>${homeSection === "parati" ? `<a class="small" href="#/personalizar">Ajustar ›</a>` : homeSection ? `<a class="small" href="#/buscar?s=${homeSection}">Filtrar ›</a>` : ""}</div>
     <div class="grid" id="feed">${skelGrid()}</div>
     <div style="padding-top:14px"><button class="btn ghost" id="more" hidden>Ver más</button></div>`;
   let page = 0;
@@ -234,7 +262,7 @@ async function home(id) {
   async function load(reset) {
     if (reset) { page = 0; $("#feed").innerHTML = skelGrid(); }
     let q = sb.from("listings").select(FEED_COLS).eq("status", "active").eq("seller.vacation", false).order("created_at", { ascending: false }).range(page * PAGE, page * PAGE + PAGE - 1);
-    if (homeSection === "parati") { const pr = getPrefs(); if (pr.sections?.length) q = q.in("section", pr.sections); if (pr.town) q = q.eq("town", pr.town); }
+    if (homeSection === "parati") q = applyMine(q, { sizes: true, genders: true, brands: prefs.brands.length && !prefs.genders.length && !prefs.sizes.length });
     else if (homeSection) q = q.eq("section", homeSection);
     const { data, error } = await q;
     if (stale(id)) return;
@@ -254,22 +282,25 @@ async function home(id) {
 }
 
 /* ---------- buscar ---------- */
-const filt = { q: "", section: "", sub: "", size: "", cond: "", town: "", min: "", max: "", sort: "new" };
+const filt = { q: "", path: [], size: "", brand: "", cond: "", town: "", min: "", max: "", sort: "new", mine: null };
 const SORTS = [["new", "Más recientes"], ["low", "Precio: menor a mayor"], ["high", "Precio: mayor a menor"]];
 async function search(id) {
   const qs = new URLSearchParams(location.hash.split("?")[1] || "");
-  if (qs.get("s") != null) { filt.section = qs.get("s"); filt.sub = ""; filt.size = ""; }
+  if (qs.get("s") != null) { const n = sectionName(qs.get("s")); filt.path = n ? [n] : []; filt.size = ""; }
+  if (filt.mine === null) filt.mine = prefs.sizes.length > 0;
   const chip = (k, label, on) => `<button class="chip ${on ? "on" : ""}" data-f="${k}">${esc(label)} ▾</button>`;
   function bar() {
-    const sec = filt.section ? sectionName(filt.section) + (filt.sub ? " › " + filt.sub : "") : "Categoría";
+    const groups = sizeGroupsFor(filt.path);
     return [
-      chip("cat", sec, filt.section),
-      sizeTypeFor(filt.section, filt.sub) ? chip("size", filt.size ? "Talla " + filt.size : "Talla", filt.size) : "",
+      chip("cat", filt.path.length ? filt.path.slice(-2).join(" › ") : "Categoría", filt.path.length),
+      prefs.sizes.length ? `<button class="chip ${filt.mine ? "on" : ""}" data-f="mine" aria-pressed="${!!filt.mine}">${filt.mine ? "✓ " : ""}Mis tallas</button>` : "",
+      groups.length ? chip("size", filt.size ? "Talla " + filt.size : "Talla", filt.size) : "",
+      chip("brand", filt.brand || "Marca", filt.brand),
       chip("cond", filt.cond || "Estado", filt.cond),
       chip("price", filt.min || filt.max ? `$${filt.min || 0} – ${filt.max ? "$" + filt.max : "más"}` : "Precio", filt.min || filt.max),
       chip("town", filt.town || "Pueblo", filt.town),
       chip("sort", SORTS.find((s) => s[0] === filt.sort)[1], filt.sort !== "new"),
-      filt.section || filt.size || filt.cond || filt.min || filt.max || filt.town || filt.sort !== "new" ? `<button class="chip" data-f="clear">Borrar filtros</button>` : "",
+      filt.path.length || filt.size || filt.brand || filt.cond || filt.min || filt.max || filt.town || filt.sort !== "new" ? `<button class="chip" data-f="clear">Borrar filtros</button>` : "",
     ].join("");
   }
   app.innerHTML = `<div class="top">
@@ -278,28 +309,30 @@ async function search(id) {
     <div class="small" id="count" style="margin-bottom:8px">&nbsp;</div>
     <div class="grid" id="res">${skelGrid()}</div>
     <div style="padding-top:14px"><button class="btn ghost" id="more" hidden>Ver más</button></div>`;
-  if (!filt.q && !filt.section) setTimeout(() => $("#q")?.focus(), 50);
+  if (!filt.q && !filt.path.length) setTimeout(() => $("#q")?.focus(), 50);
   let page = 0;
   const PAGE = 24;
   async function load(reset) {
     if (reset) { page = 0; $("#res").innerHTML = skelGrid(); $("#fbar").innerHTML = bar(); }
     let q = sb.from("listings").select(FEED_COLS, { count: "exact" }).eq("status", "active").eq("seller.vacation", false);
-    if (filt.section) q = q.eq("section", filt.section);
-    if (filt.sub) q = q.eq("subcategory", filt.sub);
+    if (filt.path.length) q = q.eq("section", sectionKey(filt.path[0]));
+    if (filt.path.length > 1) q = q.contains("cat_path", filt.path);
     if (filt.size) q = q.eq("size", filt.size);
+    else if (filt.mine) q = applyMine(q, { sizes: true });
+    if (filt.brand) q = q.eq("brand", filt.brand);
     if (filt.cond) q = q.eq("cond", filt.cond);
     if (filt.town) q = q.eq("town", filt.town);
     if (filt.min) q = q.gte("price", Number(filt.min));
     if (filt.max) q = q.lte("price", Number(filt.max));
-    const term = filt.q.replace(/[%,()_\\.]/g, " ").trim();
-    if (term) q = q.or(`title.ilike.%${term}%,brand.ilike.%${term}%`);
+    const term = filt.q.replace(/[%,()_\\."]/g, " ").trim();
+    if (term) q = q.or(`title.ilike.%${term}%,brand.ilike.%${term}%,subcategory.ilike.%${term}%`);
     q = filt.sort === "low" ? q.order("price", { ascending: true }) : filt.sort === "high" ? q.order("price", { ascending: false }) : q.order("created_at", { ascending: false });
     const { data, error, count } = await q.range(page * PAGE, page * PAGE + PAGE - 1);
     if (stale(id)) return;
     if (error) { $("#res").innerHTML = `<div class="empty" style="grid-column:1/-1">${esc(cleanErr(error))}</div>`; return; }
-    $("#count").textContent = `${count ?? data.length} resultado${count === 1 ? "" : "s"}`;
+    $("#count").textContent = `${count ?? data.length} resultado${count === 1 ? "" : "s"}${filt.mine && !filt.size ? " en tus tallas" : ""}`;
     const html = data.map(cardHTML).join("");
-    if (page === 0) $("#res").innerHTML = html || `<div class="empty" style="grid-column:1/-1">No encontramos nada con esos filtros.</div>`;
+    if (page === 0) $("#res").innerHTML = html || `<div class="empty" style="grid-column:1/-1">No encontramos nada con esos filtros.${filt.mine ? `<br><br><button class="btn ghost small" data-f="mine">Ver todas las tallas</button>` : ""}</div>`;
     else $("#res").insertAdjacentHTML("beforeend", html);
     $("#more").hidden = data.length < PAGE;
   }
@@ -310,9 +343,11 @@ async function search(id) {
     if (e.target.id === "more") { page++; load(false); return; }
     const f = e.target.closest("[data-f]")?.dataset.f;
     if (!f) return;
-    if (f === "clear") { Object.assign(filt, { section: "", sub: "", size: "", cond: "", town: "", min: "", max: "", sort: "new" }); load(true); return; }
-    if (f === "cat") pickCategory(filt.section, filt.sub, true, (s, sub) => { filt.section = s; filt.sub = sub; filt.size = ""; load(true); });
-    if (f === "size") pickSize(sizeTypeFor(filt.section, filt.sub), filt.size, (v) => { filt.size = v; load(true); }, true);
+    if (f === "clear") { Object.assign(filt, { path: [], size: "", brand: "", cond: "", town: "", min: "", max: "", sort: "new" }); load(true); return; }
+    if (f === "mine") { filt.mine = !filt.mine; load(true); return; }
+    if (f === "cat") pickCategory(filt.path, true, (path) => { filt.path = path; filt.size = ""; load(true); });
+    if (f === "size") pickSize(sizeGroupsFor(filt.path), filt.size, (v) => { filt.size = v; load(true); }, true);
+    if (f === "brand") pickBrand(filt.brand, (v) => { filt.brand = v; load(true); }, true);
     if (f === "cond") pickCond(filt.cond, (v) => { filt.cond = v; load(true); }, true);
     if (f === "town") pickTown(filt.town, (v) => { filt.town = v; load(true); }, true);
     if (f === "sort") openSheet("Ordenar", SORTS.map(([k, n]) => `<button class="optrow" data-v="${k}" aria-pressed="${filt.sort === k}">${n}<span class="radio"></span></button>`).join(""), (ev) => { const b = ev.target.closest("[data-v]"); if (b) { filt.sort = b.dataset.v; closeSheet(); load(true); } });
@@ -325,38 +360,93 @@ async function search(id) {
 }
 
 /* ---------- selectores ---------- */
-function pickCategory(cur, curSub, allowAll, done) {
-  const lvl1 = () => (allowAll ? `<button class="optrow" data-all>Todas las categorías<span class="radio"></span></button>` : "") +
-    SECTIONS.map((s) => `<button class="optrow" data-sec="${s.k}">${s.n}${CHEV}</button>`).join("");
-  const lvl2 = (k) => {
-    const s = SECTIONS.find((x) => x.k === k);
-    return `<button class="optrow" data-back style="color:var(--sea);font-weight:700">‹ Todas las categorías</button>` +
-      (allowAll ? `<button class="optrow" data-pick="" aria-pressed="${cur === k && !curSub}">Todo en ${s.n}<span class="radio"></span></button>` : "") +
-      s.subs.map(([n]) => `<button class="optrow" data-pick="${esc(n)}" aria-pressed="${cur === k && curSub === n}">${n}<span class="radio"></span></button>`).join("");
+function pickCategory(cur, allowAll, done) {
+  let path = cur?.length ? (isLeaf(cur) ? cur.slice(0, -1) : [...cur]) : [];
+  let term = "";
+  const title = () => (path.length ? path[path.length - 1] : "Categoría");
+  const list = () => {
+    if (term) {
+      const t = term.toLowerCase();
+      const hits = ALL_LEAVES.filter((p) => p.join(" ").toLowerCase().includes(t)).slice(0, 40);
+      return hits.map((p) => `<button class="optrow" data-full="${esc(JSON.stringify(p))}"><span>${esc(p[p.length - 1])}<small>${esc(p.slice(0, -1).join(" › "))}</small></span><span class="radio"></span></button>`).join("") || `<div class="empty">No encontramos esa categoría.</div>`;
+    }
+    return (allowAll ? `<button class="optrow" data-here aria-pressed="${JSON.stringify(cur || []) === JSON.stringify(path)}">${path.length ? "Todo en " + esc(title()) : "Todas las categorías"}<span class="radio"></span></button>` : "") +
+      childrenAt(path).map((n) => {
+        const p = [...path, n[0]];
+        const leaf = !n[2]?.length;
+        return leaf
+          ? `<button class="optrow" data-full="${esc(JSON.stringify(p))}" aria-pressed="${JSON.stringify(cur || []) === JSON.stringify(p)}">${esc(n[0])}<span class="radio"></span></button>`
+          : `<button class="optrow" data-go="${esc(n[0])}">${esc(n[0])}${CHEV}</button>`;
+      }).join("");
   };
-  let sec = cur;
-  openSheet("Categoría", cur ? lvl2(cur) : lvl1(), (e, sh) => {
-    const b = e.target.closest("[data-sec],[data-back],[data-pick],[data-all]");
+  const body = () => `<div class="sheetnav">${path.length ? `<button class="iconbtn" data-up aria-label="Atrás">‹</button>` : ""}</div>
+    <label class="searchbox inset">${SEARCH}<input id="catq" type="search" placeholder="Busca una categoría" autocomplete="off" value="${esc(term)}"></label>
+    <div id="catlist">${list()}</div>`;
+  const sh = openSheet("Categoría", body(), (e) => {
+    const b = e.target.closest("[data-go],[data-up],[data-full],[data-here]");
     if (!b) return;
-    if (b.dataset.sec) { sec = b.dataset.sec; setSheet(sh, sectionName(sec), lvl2(sec)); }
-    else if (b.hasAttribute("data-back")) setSheet(sh, "Categoría", lvl1());
-    else if (b.hasAttribute("data-all")) { closeSheet(); done("", ""); }
-    else { closeSheet(); done(sec, b.dataset.pick); }
+    if (b.dataset.go) { path.push(b.dataset.go); term = ""; redraw(); }
+    else if (b.hasAttribute("data-up")) { path.pop(); redraw(); }
+    else if (b.hasAttribute("data-here")) { closeSheet(); done([...path]); }
+    else { closeSheet(); done(JSON.parse(b.dataset.full)); }
+  });
+  sh.classList.add("tall");
+  function redraw() { setSheet(sh, title(), body()); bindQ(); }
+  function bindQ() { const q = $("#catq", sh); q.oninput = () => { term = q.value.trim(); $("#catlist", sh).innerHTML = list(); }; }
+  redraw();
+}
+function sizeGroupsHTML(groups, isOn, multi) {
+  return groups.map((g) => {
+    const [name, sizes] = SIZE_GROUPS[g];
+    return `<div class="sgroup"><span class="label">${name}</span><div class="sizegrid two">${sizes.map((x) => `<button class="sizebtn" data-v="${esc(x)}" aria-pressed="${isOn(x)}">${esc(x)}</button>`).join("")}</div></div>`;
+  }).join("");
+}
+function pickSize(groups, cur, done, allowAll) {
+  const sh = openSheet("Talla", `<div class="infobox">ⓘ Escoge la talla que dice la etiqueta del artículo.</div>
+    ${allowAll ? `<button class="optrow" data-v="">Cualquier talla<span class="radio"></span></button>` : ""}
+    ${sizeGroupsHTML(groups, (x) => x === cur)}`,
+    (e) => { const b = e.target.closest("[data-v]"); if (b) { closeSheet(); done(b.dataset.v); } });
+  sh.classList.add("tall");
+}
+function pickBrand(cur, done, allowAll) {
+  let term = "";
+  const list = () => {
+    const t = term.toLowerCase();
+    const hits = BRANDS.filter((b) => b.toLowerCase().includes(t));
+    const exact = BRANDS.some((b) => b.toLowerCase() === t);
+    return (term && !exact ? `<button class="optrow" data-v="${esc(term)}"><span>Usar “${esc(term)}”<small>Marca que no está en la lista</small></span><span class="radio"></span></button>` : "") +
+      (!term ? `<button class="optrow" data-v="" aria-pressed="${!cur}">${allowAll ? "Todas las marcas" : "Sin marca"}<span class="radio"></span></button><span class="label" style="display:block;padding:12px 0 4px">Marcas populares</span>` : "") +
+      hits.map((b) => `<button class="optrow" data-v="${esc(b)}" aria-pressed="${cur === b}">${esc(b)}<span class="radio"></span></button>`).join("");
+  };
+  const sh = openSheet("Marca", `<label class="searchbox inset">${SEARCH}<input id="brq" type="search" placeholder="Busca marcas" autocomplete="off"></label><div id="brlist">${list()}</div>`,
+    (e) => { const b = e.target.closest("[data-v]"); if (b) { closeSheet(); done(b.dataset.v); } });
+  sh.classList.add("tall");
+  const q = $("#brq", sh);
+  q.oninput = () => { term = q.value.trim().slice(0, 40); $("#brlist", sh).innerHTML = list(); };
+}
+function pickParcel(cur, done) {
+  let v = cur || "M";
+  const body = () => PARCELS.map(([k, n, d, price]) => `<button class="optrow" data-v="${k}" aria-pressed="${v === k}"><span>${k === "M" ? `<em class="rec">Recomendado</em>` : ""}<b>${n}</b><small>${d} Envío: ${money(price)}</small></span><span class="radio"></span></button>`).join("") +
+    `<button class="btn primary" data-ok style="margin-top:12px">Listo</button>`;
+  openSheet("Tamaño del paquete", body(), (e, sh) => {
+    const b = e.target.closest("[data-v]");
+    if (b) { v = b.dataset.v; setSheet(sh, "Tamaño del paquete", body()); return; }
+    if (e.target.closest("[data-ok]")) { closeSheet(); done(v); }
   });
 }
-function pickSize(type, cur, done, allowAll) {
-  const list = SIZES[type] || [];
-  const sh = openSheet("Talla", `${allowAll ? `<button class="optrow" data-v="">Cualquier talla<span class="radio"></span></button>` : ""}
-    <div class="sizegrid">${list.map((s) => `<button class="chip" data-v="${esc(s)}" aria-pressed="${cur === s}">${esc(s)}</button>`).join("")}</div>
-    ${allowAll ? "" : `<div class="field"><label for="osize">¿Otra talla?</label><div class="row"><input id="osize" maxlength="20" placeholder="Escríbela" value="${list.includes(cur) ? "" : esc(cur || "")}"><button class="btn sea small" style="width:auto" data-other>Usar</button></div></div>`}`,
-    (e) => {
-      const b = e.target.closest("[data-v],[data-other]");
-      if (!b) return;
-      const v = b.hasAttribute("data-other") ? $("#osize", sh).value.trim() : b.dataset.v;
-      if (b.hasAttribute("data-other") && !v) return;
-      closeSheet();
-      done(v);
-    });
+function pickPrice(cur, done) {
+  const info = (p) => (Number(p) >= 1 ? `El comprador verá <b>${money(withFee(p))}</b> con la Protección al Comprador. Tú recibes <b>${money(p)}</b>.` : "Vender es gratis. Te quedas con el 100% del precio.");
+  const sh = openSheet("Precio", `<div class="pricebox"><span>$</span><input id="pin" type="number" min="1" max="10000" step="0.01" inputmode="decimal" placeholder="0.00" value="${esc(cur)}"></div>
+    <div class="small" id="pinfo">${info(cur)}</div><button class="btn primary" data-ok>Listo</button>`, (e) => {
+    if (!e.target.closest("[data-ok]")) return;
+    const v = parseFloat($("#pin", sh).value);
+    if (!(v >= 1)) return toast("Escribe un precio de $1 o más.");
+    closeSheet();
+    done(String(r2(v)));
+  });
+  const i = $("#pin", sh);
+  i.oninput = () => { $("#pinfo", sh).innerHTML = info(i.value); };
+  setTimeout(() => i.focus(), 60);
 }
 function pickCond(cur, done, allowAll) {
   openSheet("Estado", (allowAll ? `<button class="optrow" data-v="">Cualquier estado<span class="radio"></span></button>` : "") +
@@ -393,7 +483,7 @@ async function item(lid, id) {
   const { data: more } = await sb.from("listings").select(LIST_COLS).eq("seller_id", l.seller_id).eq("status", "active").neq("id", lid).order("created_at", { ascending: false }).limit(6);
   if (stale(id)) return;
   const s = l.seller || {};
-  const cat = [sectionName(l.section), l.subcategory].filter(Boolean).join(" › ");
+  const cat = catLabel(l);
   const rows = [["Marca", l.brand], ["Talla", l.size], ["Estado", condOf(l)], ["Color", (l.colors || []).join(", ")], ["Material", l.material], ["Categoría", cat], ["Ubicación", l.town], ["Subido", fmtAgo(l.created_at)]].filter((r) => r[1]);
   app.innerHTML = `
     <div class="galwrap">
@@ -544,6 +634,7 @@ async function checkout(id) {
   const base = r2(sub - disc);
   const f = fee(base);
   const title = list.length > 1 ? `Lote de ${list.length} artículos` : list[0].title;
+  const SHIP = shipFor(list.some((x) => x.parcel === "L") ? "L" : list.some((x) => (x.parcel || "M") === "M") ? "M" : "S");
   const bar = document.createElement("div");
   bar.className = "stickybar";
   document.body.appendChild(bar);
@@ -619,42 +710,47 @@ function compress(file) {
 }
 async function sellForm(editId, id) {
   if (needLogin()) return;
-  let l = { title: "", description: "", section: "", subcategory: "", brand: "", size: "", cond: "", colors: [], material: "", price: "", town: me?.town || "", photos: [] };
+  let l = { title: "", description: "", section: "", subcategory: "", cat_path: [], brand: "", size: "", cond: "", colors: [], material: "", price: "", parcel: "M", town: me?.town || "", photos: [] };
   if (editId) {
     app.innerHTML = `<div class="skel" style="height:300px;margin-top:20px"></div>`;
     const { data } = await sb.from("listings").select("*").eq("id", editId).maybeSingle();
     if (stale(id)) return;
     if (!data || data.seller_id !== uid()) { app.innerHTML = `${back("#/perfil")}<div class="empty">No puedes editar este artículo.</div>`; return; }
     if (data.status === "reserved" || data.status === "sold") { app.innerHTML = `${back("#/item/" + editId)}<div class="empty">Este artículo está en un pedido y no se puede editar.</div>`; return; }
-    l = { ...data, cond: data.cond || "", colors: data.colors || [], material: data.material || "", brand: data.brand || "", size: data.size || "", subcategory: data.subcategory || "", section: data.section || "" };
+    l = { ...data, cond: data.cond || "", colors: data.colors || [], material: data.material || "", brand: data.brand || "", size: data.size || "", subcategory: data.subcategory || "", section: data.section || "", cat_path: data.cat_path || [], parcel: data.parcel || "M", price: String(data.price) };
   }
   const v = { ...l, photos: [...(l.photos || [])] };
   let uploading = 0;
-  const row = (k, label, val, ph) => `<button type="button" class="rowbtn" data-row="${k}"><span>${label}</span><span class="val ${val ? "set" : ""}">${esc(val || ph)}</span>${CHEV}</button>`;
+  const vrow = (k, label, val) => `<button type="button" class="vrow" data-row="${k}"><span>${label}</span><span class="val">${esc(val || "")}</span>${val ? EDIT : PLUS}</button>`;
+  const hasPath = () => v.cat_path.length && isLeaf(v.cat_path);
+  const wearable = () => ["mujer", "hombre", "ninos", "deportes"].includes(sectionKey(v.cat_path[0] || "")) && !/Juguetes|bebé|Útiles|Belleza|Cuidado/.test(v.cat_path.join(" "));
   function draw() {
-    const stype = sizeTypeFor(v.section, v.subcategory);
-    const cat = v.section ? sectionName(v.section) + (v.subcategory ? " › " + v.subcategory : "") : "";
-    app.innerHTML = `<div class="row" style="padding-top:12px"><a class="back" href="${editId ? "#/item/" + editId : "#/"}">✕ Cerrar</a></div>
-    <form class="stack" id="sell" novalidate>
-      <h2>${editId ? "Editar artículo" : "Vender un artículo"}</h2>
-      <div class="panel"><div class="photos" id="photos"></div><span class="small">Sube hasta 8 fotos. La primera es la portada. Usa buena luz y fondo limpio.</span></div>
-      <div class="rows">
-        <div class="field" style="padding:12px 14px;border-bottom:1px solid var(--line)"><label for="f-title">Título</label><input id="f-title" maxlength="80" placeholder="Ej: Camisa Nike blanca" value="${esc(v.title)}"></div>
-        <div class="field" style="padding:12px 14px"><label for="f-desc">Describe tu artículo</label><textarea id="f-desc" maxlength="1000" placeholder="Ej: usada solo 2 veces, queda grande, tiene una manchita pequeña…">${esc(v.description || "")}</textarea></div>
+    const groups = hasPath() ? sizeGroupsFor(v.cat_path) : [];
+    const parcel = PARCELS.find((x) => x[0] === v.parcel) || PARCELS[1];
+    app.innerHTML = `<div class="sellhead"><a class="iconbtn" href="${editId ? "#/item/" + editId : "javascript:history.length>1?history.back():location.assign('#/')"}" aria-label="Cerrar">✕</a><b>${editId ? "Editar artículo" : "Vender un artículo"}</b><span></span></div>
+    <form class="sellform" id="sell" novalidate>
+      <h3 class="sh">Fotos</h3>
+      <div class="dropzone ${v.photos.length || uploading ? "has" : ""}" id="photos"></div>
+      <h3 class="sh">Sobre tu artículo</h3>
+      <div class="field"><label for="f-title">Título</label><input id="f-title" maxlength="80" placeholder="Dile a los compradores qué vendes" value="${esc(v.title)}"></div>
+      <div class="field"><label for="f-desc">Descripción</label><textarea id="f-desc" maxlength="1000" rows="5" placeholder="Cuéntales más: cómo te queda, si tiene algún detalle…">${esc(v.description || "")}</textarea></div>
+      <h3 class="sh">Detalles del artículo</h3>
+      <div class="vrows">
+        ${vrow("cat", "Categoría", hasPath() ? v.cat_path[v.cat_path.length - 1] : "")}
+        ${vrow("brand", "Marca", v.brand)}
+        ${groups.length ? vrow("size", "Talla", v.size) : ""}
+        ${vrow("cond", "Estado", v.cond)}
+        ${vrow("color", "Colores", (v.colors || []).join(", "))}
+        ${hasPath() && wearable() ? vrow("mat", "Material (recomendado)", v.material) : ""}
       </div>
-      <div class="rows">
-        ${row("cat", "Categoría", cat, "Escoge")}
-        <div class="rowinput"><label for="f-brand">Marca</label><input id="f-brand" list="brands" maxlength="40" placeholder="Escribe o escoge" value="${esc(v.brand)}"><datalist id="brands">${BRANDS.map((b) => `<option value="${esc(b)}">`).join("")}</datalist></div>
-        ${stype ? row("size", "Talla", v.size, "Escoge") : ""}
-        ${row("cond", "Estado", v.cond, "Escoge")}
-        ${row("color", "Color", (v.colors || []).join(", "), "Opcional")}
-        ${["mujer", "hombre", "disenador", "ninos", "deportes"].includes(v.section) ? row("mat", "Material", v.material, "Opcional") : ""}
+      <h3 class="sh">Precio</h3>
+      <div class="vrows">${vrow("price", "Precio", Number(v.price) >= 1 ? money(v.price) : "")}</div>
+      <h3 class="sh">Entrega</h3>
+      <span class="small">Puedes entregar en persona o enviarlo por correo. El comprador siempre paga el envío.</span>
+      <div class="vrows">
+        ${vrow("town", "Ubicación", v.town)}
+        ${vrow("parcel", "Tamaño del paquete", parcel[1])}
       </div>
-      <div class="rows">
-        <div class="rowinput"><label for="f-price">Precio</label><input id="f-price" type="number" min="1" step="1" inputmode="decimal" placeholder="$0.00" value="${esc(v.price)}"></div>
-        ${row("town", "Ubicación", v.town, "Escoge tu pueblo")}
-      </div>
-      <div class="small" id="priceinfo">${Number(v.price) >= 1 ? `El comprador verá ${money(withFee(v.price))} con la Protección al Comprador. Tú recibes ${money(v.price)}.` : "Vender es gratis. Te quedas con el 100% del precio."}</div>
       <p class="err" id="err" hidden></p>
       <button class="btn primary" id="save">${editId ? "Guardar cambios" : "Subir"}</button>
     </form>`;
@@ -663,19 +759,22 @@ async function sellForm(editId, id) {
   function drawPhotos() {
     const box = $("#photos");
     if (!box) return;
-    box.innerHTML =
-      v.photos.map((p, i) => `<div class="ph">${img(p, "Foto " + (i + 1))}<button type="button" data-rm="${i}" aria-label="Quitar foto">×</button></div>`).join("") +
+    if (!v.photos.length && !uploading) {
+      box.className = "dropzone";
+      box.innerHTML = `<label class="upbtn">+ Subir fotos<input type="file" accept="image/*" multiple id="pick"></label><span class="small">Sube hasta 8 fotos tuyas. Las fotos de internet no se permiten.</span>`;
+      return;
+    }
+    box.className = "dropzone has";
+    box.innerHTML = `<div class="photos">` +
+      v.photos.map((p, i) => `<div class="ph">${img(p, "Foto " + (i + 1))}${i === 0 ? `<span class="cover">Portada</span>` : ""}<button type="button" data-rm="${i}" aria-label="Quitar foto">×</button></div>`).join("") +
       (uploading ? `<div class="addph skel" aria-live="polite" style="font-size:12px">Subiendo…</div>` : "") +
-      (v.photos.length + uploading < 8 ? `<label class="addph" aria-label="Añadir fotos">+<input type="file" accept="image/*" multiple id="pick"></label>` : "");
+      (v.photos.length + uploading < 8 ? `<label class="addph" aria-label="Añadir fotos">+<input type="file" accept="image/*" multiple id="pick"></label>` : "") + `</div>`;
   }
-  const keep = () => { v.title = $("#f-title").value; v.description = $("#f-desc").value; v.brand = $("#f-brand").value; v.price = $("#f-price").value; };
+  const keep = () => { v.title = $("#f-title").value; v.description = $("#f-desc").value; };
   draw();
-  app.oninput = (e) => {
-    if (e.target.id === "f-price") { const p = Number(e.target.value); $("#priceinfo").textContent = p >= 1 ? `El comprador verá ${money(withFee(p))} con la Protección al Comprador. Tú recibes ${money(p)}.` : "Vender es gratis. Te quedas con el 100% del precio."; }
-  };
   app.onchange = async (e) => {
     if (e.target.id !== "pick") return;
-    const files = [...e.target.files].slice(0, 8 - v.photos.length);
+    const files = [...e.target.files].slice(0, 8 - v.photos.length - uploading);
     for (const f of files) {
       uploading++; drawPhotos();
       try {
@@ -694,26 +793,33 @@ async function sellForm(editId, id) {
     const r = e.target.closest("[data-row]")?.dataset.row;
     if (!r) return;
     keep();
-    if (r === "cat") pickCategory(v.section, v.subcategory, false, (s, sub) => { if (s !== v.section || sub !== v.subcategory) v.size = ""; v.section = s; v.subcategory = sub; draw(); });
-    if (r === "size") pickSize(sizeTypeFor(v.section, v.subcategory), v.size, (x) => { v.size = x; draw(); });
+    if (r === "cat") pickCategory(v.cat_path, false, (path) => {
+      const g1 = sizeGroupsFor(v.cat_path).join(), g2 = sizeGroupsFor(path).join();
+      if (g1 !== g2) v.size = "";
+      v.cat_path = path; v.section = sectionKey(path[0]); v.subcategory = path[path.length - 1]; draw();
+    });
+    if (r === "brand") pickBrand(v.brand, (x) => { v.brand = x; draw(); });
+    if (r === "size") pickSize(sizeGroupsFor(v.cat_path), v.size, (x) => { v.size = x; draw(); });
     if (r === "cond") pickCond(v.cond, (x) => { v.cond = x; draw(); });
     if (r === "color") pickColors(v.colors || [], (x) => { v.colors = x; draw(); });
     if (r === "mat") pickMaterial(v.material, (x) => { v.material = x; draw(); });
+    if (r === "price") pickPrice(v.price, (x) => { v.price = x; draw(); });
     if (r === "town") pickTown(v.town, (x) => { v.town = x; draw(); });
+    if (r === "parcel") pickParcel(v.parcel, (x) => { v.parcel = x; draw(); });
   };
   app.onsubmit = (e) => {
     e.preventDefault();
     keep();
     const err = $("#err");
-    const stype = sizeTypeFor(v.section, v.subcategory);
+    const groups = hasPath() ? sizeGroupsFor(v.cat_path) : [];
     const price = parseFloat(v.price);
-    const miss = uploading ? "Espera a que terminen de subir las fotos." : !v.photos.length ? "Añade al menos una foto." : v.title.trim().length < 3 ? "Escribe un título (3 letras o más)." : !v.section || !v.subcategory ? "Escoge la categoría." : stype && !v.size ? "Escoge la talla." : !v.cond ? "Escoge el estado." : !(price >= 1) ? "Escribe un precio de $1 o más." : !v.town ? "Escoge tu ubicación." : "";
+    const miss = uploading ? "Espera a que terminen de subir las fotos." : !v.photos.length ? "Añade al menos una foto." : v.title.trim().length < 3 ? "Escribe un título (3 letras o más)." : !hasPath() ? "Escoge la categoría." : groups.length && !v.size ? "Escoge la talla." : !v.cond ? "Escoge el estado." : !(price >= 1) ? "Ponle precio (de $1 en adelante)." : !v.town ? "Escoge tu ubicación." : "";
     if (miss) { err.textContent = miss; err.hidden = false; err.scrollIntoView({ behavior: "smooth", block: "center" }); return; }
     err.hidden = true;
     const row = {
-      title: v.title.trim(), description: v.description.trim() || null, section: v.section, subcategory: v.subcategory,
-      brand: v.brand.trim() || null, size: stype ? v.size : null, cond: v.cond, colors: v.colors || [], material: v.material || null,
-      price, town: v.town, photos: v.photos,
+      title: v.title.trim(), description: v.description.trim() || null, section: sectionKey(v.cat_path[0]), subcategory: v.cat_path[v.cat_path.length - 1], cat_path: v.cat_path,
+      brand: v.brand.trim() || null, size: groups.length ? v.size : null, cond: v.cond, colors: v.colors || [], material: wearable() ? v.material || null : null,
+      price, parcel: v.parcel, town: v.town, photos: v.photos,
     };
     busy($("#save"), async () => {
       if (editId) {
@@ -1075,9 +1181,6 @@ const ICONS = {
 const mrow = (icon, label, { href, act, right = "" } = {}) =>
   `${href ? `<a class="rowbtn" href="${href}">` : `<button class="rowbtn" data-act="${act}">`}<span class="ml">${ic(ICONS[icon])}<span>${label}</span></span><span class="mr">${right}${CHEV}</span>${href ? "</a>" : "</button>"}`;
 const prose = (h) => `<div class="prose">${h}</div>`;
-const PREF_KEY = "pulguea:prefs";
-function getPrefs() { try { return JSON.parse(localStorage.getItem(PREF_KEY)) || { sections: [], town: "" }; } catch { return { sections: [], town: "" }; } }
-function setPrefs(p) { try { localStorage.setItem(PREF_KEY, JSON.stringify(p)); } catch {} }
 
 async function walletInfo() {
   const { data } = await sb.from("orders").select("status,subtotal,discount,total,refund_amount").eq("seller_id", uid());
@@ -1115,7 +1218,7 @@ async function profile(id) {
       ${mrow("rocket", "Herramientas de promoción", { act: "promo" })}
     </div>
     <div class="rows">
-      ${mrow("sliders", "Personalización", { act: "pers" })}
+      ${mrow("sliders", "Personalización", { href: "#/personalizar" })}
       ${mrow("umbrella", "Modo vacaciones", { act: "vac", right: `<span class="val">${vac ? "Activado" : "Apagado"}</span>` })}
     </div>
     <div class="rows">
@@ -1137,11 +1240,10 @@ async function profile(id) {
     if (a === "out") busy(b, async () => { await sb.auth.signOut(); toast("Cerraste sesión."); location.hash = "#/"; });
     if (a === "invite") inviteSheet();
     if (a === "promo") promoSheet();
-    if (a === "pers") persSheet();
     if (a === "vac") vacationSheet(id);
     if (a === "how") guideSheet();
     if (a === "help") helpSheet();
-    if (a === "cookies") openSheet("Configuración de cookies", prose(`<p>Pulguea solo guarda en tu teléfono lo necesario para funcionar:</p><ul><li><b>Tu sesión</b>, para que no tengas que entrar cada vez.</li><li><b>Tus preferencias</b>, como las categorías de Personalización.</li></ul><p>No usamos cookies de anuncios ni te rastreamos en otras páginas. Si algún día añadimos cookies opcionales, podrás apagarlas aquí.</p>`) + `<button class="btn ghost" data-clear>Borrar mis preferencias guardadas</button>`, (ev) => { if (ev.target.closest("[data-clear]")) { try { localStorage.removeItem(PREF_KEY); } catch {} closeSheet(); toast("Preferencias borradas."); } });
+    if (a === "cookies") openSheet("Configuración de cookies", prose(`<p>Pulguea solo guarda en tu teléfono lo necesario para funcionar:</p><ul><li><b>Tu sesión</b>, para que no tengas que entrar cada vez.</li><li><b>Pequeños ajustes</b> de la app en este teléfono.</li></ul><p>No usamos cookies de anuncios ni te rastreamos en otras páginas. Si algún día añadimos cookies opcionales, podrás apagarlas aquí.</p>`));
     if (a === "about") openSheet("Sobre Pulguea", prose(`<div style="text-align:center;margin:4px 0 10px"><span class="logo" style="font-size:34px;justify-content:center">${LOGO}<span aria-hidden="true">ulguea</span></span></div><p>Pulguea es el mercado de segunda mano hecho para Puerto Rico. Compras y vendes con gente de tu pueblo, se encuentran en persona y te lo llevas el mismo día, sin esperar semanas por un envío.</p><p>El dinero se queda guardado en la app hasta que recibes el artículo, así nadie tiene que andar con efectivo.</p><p class="small">Versión de prueba${TEST_MODE ? " · los pagos son de mentira" : ""}</p>`));
     if (a === "legal") legalSheet();
   };
@@ -1169,21 +1271,97 @@ function promoSheet() {
       try { if (navigator.share) await navigator.share({ title: "Mi armario en Pulguea", url: link }); else { await navigator.clipboard.writeText(link); toast("Enlace copiado."); } } catch {}
     });
 }
-function persSheet() {
-  const p = getPrefs();
-  const sel = new Set(p.sections);
-  let town = p.town || "";
-  const body = () => `<span class="small">Escoge lo que te interesa y te lo mostramos primero en <b>Para ti</b>, en Inicio.</span>
-    <div class="chips wrap" style="margin:10px 0">${SECTIONS.map((s) => `<button class="chip ${sel.has(s.k) ? "on" : ""}" data-sec="${s.k}" aria-pressed="${sel.has(s.k)}">${s.n}</button>`).join("")}</div>
-    <div class="rows" style="border:1px solid var(--line)"><button class="rowbtn" data-town><span>Mi zona</span><span class="val ${town ? "set" : ""}">${esc(town || "Todo Puerto Rico")}</span>${CHEV}</button></div>
-    <button class="btn primary" data-ok style="margin-top:12px">Guardar</button>`;
-  const open = () => openSheet("Personalización", body(), (e, sh) => {
-    const c = e.target.closest("[data-sec]");
-    if (c) { const k = c.dataset.sec; sel.has(k) ? sel.delete(k) : sel.add(k); setSheet(sh, "Personalización", body()); return; }
-    if (e.target.closest("[data-town]")) { pickTown(town, (t) => { town = t; open(); }, true); return; }
-    if (e.target.closest("[data-ok]")) { setPrefs({ sections: [...sel], town }); homeSection = sel.size || town ? "parati" : ""; closeSheet(); toast("Guardado. Míralo en Inicio › Para ti."); }
-  });
-  open();
+/* ---------- Personalización (como Vinted) ---------- */
+const GENDERS = [["mujer", "Mujer", '<path d="M9 3v3l-2 4v11h10V10l-2-4V3"/><path d="M9 6h6"/>'], ["hombre", "Hombre", '<path d="M8 3l-5 3 2 5 3-1v11h8V10l3 1 2-5-5-3a4 4 0 0 1-8 0z"/>'], ["ninos", "Niños", '<circle cx="12" cy="13" r="8"/><path d="M9 13h.01M15 13h.01M9.5 16.5a3.5 3.5 0 0 0 5 0M12 5c0-1.5 1-2 2-2"/>']];
+const pagehead = (backTo, title) => `<div class="sellhead"><a class="iconbtn" href="${backTo}" aria-label="Volver">‹</a><b>${esc(title)}</b><span></span></div>`;
+const checkbox = (on) => `<span class="cbox ${on ? "on" : ""}" aria-hidden="true">${on ? "✓" : ""}</span>`;
+const sizesOf = (g) => prefs.sizes.filter((x) => GENDER_GROUPS[g].includes(x.split(":")[0])).map((x) => x.slice(x.indexOf(":") + 1));
+async function persMain(id) {
+  if (needLogin()) return;
+  app.innerHTML = `${pagehead("#/perfil", "Personalización")}
+    <div class="pagehero"><h2>Ve solo lo que te queda</h2><span class="small">Escoge las categorías, tallas y marcas que quieres ver primero en tu Inicio y en Buscar.</span></div>
+    <div class="flatrows">
+      <a class="rowbtn" href="#/personalizar/tallas"><span>Categorías y tallas</span><span class="mr"><span class="val">${esc(prefs.genders.map(sectionName).join(", "))}</span>${CHEV}</span></a>
+      <a class="rowbtn" href="#/personalizar/marcas"><span>Marcas</span><span class="mr"><span class="val">${esc(prefs.brands.slice(0, 3).join(", "))}${prefs.brands.length > 3 ? "…" : ""}</span>${CHEV}</span></a>
+    </div>
+    ${hasPrefs() ? `<div style="padding:16px 0"><a class="btn ghost" href="#/" data-pt>Ver “Para ti” en Inicio</a></div>` : ""}`;
+  app.onclick = (e) => { if (e.target.closest("[data-pt]")) homeSection = "parati"; };
+}
+async function persSizes(id) {
+  if (needLogin()) return;
+  const draw = () => {
+    app.innerHTML = `${pagehead("#/personalizar", "Categorías y tallas")}
+      <div class="pagehero"><h2>Tus tallas</h2><span class="small">Escoge las tallas que más te interesan.</span></div>
+      <div class="flatrows">${GENDERS.map(([k, n, icon]) => `
+        <button class="rowbtn gender" data-g="${k}"><span class="ml"><svg class="mi accent" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${icon}</svg><b>${n}</b></span>${checkbox(prefs.genders.includes(k))}</button>
+        <a class="rowbtn sub" href="#/personalizar/tallas/${k}"><span>Tallas</span><span class="mr"><span class="val">${esc(sizesOf(k).join(", "))}</span>${CHEV}</span></a>`).join("")}
+      </div>`;
+  };
+  draw();
+  app.onclick = async (e) => {
+    const g = e.target.closest("[data-g]")?.dataset.g;
+    if (!g) return;
+    prefs.genders = prefs.genders.includes(g) ? prefs.genders.filter((x) => x !== g) : [...prefs.genders, g];
+    draw();
+    await savePrefs();
+  };
+}
+async function persSizeGroup(g, id) {
+  if (needLogin()) return;
+  const name = GENDERS.find((x) => x[0] === g)?.[1];
+  if (!name) { location.hash = "#/personalizar/tallas"; return; }
+  const draw = () => {
+    app.innerHTML = `${pagehead("#/personalizar/tallas", name)}
+      <div class="flatrows">${GENDER_GROUPS[g].map((grp) => {
+        const [gn, sizes] = SIZE_GROUPS[grp];
+        return `<div class="grouplabel">${gn}</div>` + sizes.map((x) => { const t = grp + ":" + x; const on = prefs.sizes.includes(t); return `<button class="rowbtn" data-t="${esc(t)}" aria-pressed="${on}"><span>${esc(x)}</span>${checkbox(on)}</button>`; }).join("");
+      }).join("")}</div>`;
+  };
+  draw();
+  let deb;
+  app.onclick = (e) => {
+    const b = e.target.closest("[data-t]");
+    if (!b) return;
+    const t = b.dataset.t;
+    const on = prefs.sizes.includes(t);
+    prefs.sizes = on ? prefs.sizes.filter((x) => x !== t) : [...prefs.sizes, t];
+    if (!on && !prefs.genders.includes(g)) prefs.genders = [...prefs.genders, g];
+    b.setAttribute("aria-pressed", !on);
+    b.querySelector(".cbox").outerHTML = checkbox(!on);
+    filt.mine = prefs.sizes.length > 0;
+    clearTimeout(deb);
+    deb = setTimeout(() => { deb = null; savePrefs(); }, 400);
+  };
+  cleanups.push(() => { if (deb) { clearTimeout(deb); savePrefs(); } });
+}
+async function persBrands(id) {
+  if (needLogin()) return;
+  let term = "";
+  const list = () => {
+    const t = term.toLowerCase();
+    const all = [...new Set([...prefs.brands, ...BRANDS])];
+    const hits = all.filter((b) => b.toLowerCase().includes(t));
+    const extra = term && !all.some((b) => b.toLowerCase() === t) ? `<button class="rowbtn" data-b="${esc(term)}"><span>Añadir “${esc(term)}”</span>${checkbox(false)}</button>` : "";
+    return extra + hits.map((b) => `<button class="rowbtn" data-b="${esc(b)}" aria-pressed="${prefs.brands.includes(b)}"><span>${esc(b)}</span>${checkbox(prefs.brands.includes(b))}</button>`).join("");
+  };
+  app.innerHTML = `${pagehead("#/personalizar", "Marcas")}
+    <div class="pagehero"><h2>Tus marcas</h2><span class="small">Escoge las marcas que te gustan.</span></div>
+    <label class="searchbox">${SEARCH}<input id="bq" type="search" placeholder="Busca marcas" autocomplete="off"></label>
+    <div class="flatrows" id="bl">${list()}</div>`;
+  app.oninput = (e) => { if (e.target.id === "bq") { term = e.target.value.trim().slice(0, 40); $("#bl").innerHTML = list(); } };
+  let deb;
+  app.onclick = (e) => {
+    const b = e.target.closest("[data-b]");
+    if (!b) return;
+    const n = b.dataset.b;
+    const on = prefs.brands.includes(n);
+    if (!on && prefs.brands.length >= 100) return toast("Máximo 100 marcas.");
+    prefs.brands = on ? prefs.brands.filter((x) => x !== n) : [...prefs.brands, n];
+    $("#bl").innerHTML = list();
+    clearTimeout(deb);
+    deb = setTimeout(() => { deb = null; savePrefs(); }, 400);
+  };
+  cleanups.push(() => { if (deb) { clearTimeout(deb); savePrefs(); } });
 }
 function vacationSheet(rid) {
   const on = !!me?.vacation;
@@ -1396,13 +1574,13 @@ async function newPassword() {
 (async () => {
   const { data } = await sb.auth.getSession();
   session = data.session;
-  await Promise.all([loadMe(), loadFavs()]);
+  await Promise.all([loadMe(), loadFavs(), loadPrefs()]);
   let recovering = false;
   sb.auth.onAuthStateChange((ev, s) => {
     const had = !!session;
     session = s;
     if (ev === "PASSWORD_RECOVERY") { recovering = true; loadMe().then(() => (location.hash = "#/clave")); return; }
-    if (had !== !!s) Promise.all([loadMe(), loadFavs()]).then(() => { if (!recovering) route(); });
+    if (had !== !!s) Promise.all([loadMe(), loadFavs(), loadPrefs()]).then(() => { if (!recovering) route(); });
   });
   window.addEventListener("hashchange", route);
   route();
