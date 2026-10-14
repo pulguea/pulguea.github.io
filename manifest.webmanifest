@@ -1,7 +1,7 @@
 {
   "name": "Pulguea",
   "short_name": "Pulguea",
-  "description": "Segunda mano en Puerto Rico, con entrega hoy mismo.",
+  "description": "El pulguero de bolsillo: compra y vende de segunda mano en Puerto Rico.",
   "lang": "es",
   "start_url": "./",
   "scope": "./",

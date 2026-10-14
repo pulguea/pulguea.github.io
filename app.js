@@ -74,7 +74,7 @@ const fmtAgo = (ts) => {
 };
 const initial = (n) => esc((n || "?").trim().charAt(0));
 const condOf = (l) => l.cond || l.condition || "";
-const header = (extra = "") => `<div class="top"><div class="brand"><a class="logo" href="#/" aria-label="pulguea">${LOGO}<span aria-hidden="true">ulguea</span></a><span class="tag">Segunda mano · Puerto Rico</span></div>${TEST_MODE ? `<div class="testbar">Versión de prueba: los pagos son de mentira</div>` : ""}${extra}</div>`;
+const header = (extra = "") => `<div class="top"><div class="brand"><a class="logo" href="#/" aria-label="pulguea">${LOGO}<span aria-hidden="true">ulguea</span></a><span class="tag">El pulguero de bolsillo</span></div>${TEST_MODE ? `<div class="testbar">Versión de prueba: los pagos son de mentira</div>` : ""}${extra}</div>`;
 const back = (href, label = "Volver") => `<a class="back" href="${href}">‹ ${label}</a>`;
 const img = (p, alt = "") => `<img class="fade" src="${esc(photoUrl(p))}" alt="${esc(alt)}" loading="lazy" onload="this.classList.add('in')">`;
 const thumb = (l) => `<div class="thumb">${l?.photos?.[0] ? img(l.photos[0]) : ""}</div>`;
@@ -1274,7 +1274,7 @@ async function profile(id) {
 }
 function inviteSheet() {
   const link = location.origin + location.pathname;
-  const text = "Mira Pulguea: compra y vende de segunda mano en Puerto Rico y recógelo hoy mismo.";
+  const text = "Mira Pulguea, el pulguero de bolsillo: compra y vende de segunda mano en Puerto Rico y recógelo hoy mismo.";
   openSheet("Invita a tus amigos", prose(`<p>Mientras más gente venda en tu pueblo, más cosas vas a encontrar cerca. Comparte Pulguea con tus amigos.</p>`) +
     `<div class="rowinput" style="border:1px solid var(--line);border-radius:12px"><input readonly value="${esc(link)}" aria-label="Enlace" style="border:0;padding:10px 0"></div>
      <button class="btn primary" data-share>Compartir enlace</button>`, async (e) => {
