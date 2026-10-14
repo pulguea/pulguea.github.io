@@ -25,7 +25,12 @@ const BUNDLE_OFF = 0.1;
 const photoUrl = (p) => `${SUPABASE_URL}/storage/v1/object/public/fotos/${p}`;
 const uid = () => session?.user?.id;
 const LIST_COLS = "id,title,price,size,brand,section,subcategory,cat_path,parcel,cond,condition,town,photos,status,fav_count,seller_id";
-const FEED_COLS = LIST_COLS + ",seller:profiles!listings_seller_id_fkey!inner(vacation)";
+const FEED_COLS = LIST_COLS + ",seller:profiles!listings_seller_id_fkey!inner(vacation,sales_count,rating_count,rating_avg,strikes)";
+// Vendedor confiable: 5+ ventas en la app, 3+ reseñas, 4.5+ estrellas y ninguna falta
+const TRUST = { sales: 5, reviews: 3, stars: 4.5 };
+const isTrusted = (p) => !!p && p.sales_count >= TRUST.sales && p.rating_count >= TRUST.reviews && Number(p.rating_avg) >= TRUST.stars && !p.strikes;
+const TRUST_SVG = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path d="M12 3l2.4 1.8 3-.2.9 2.9 2.4 1.8-1 2.8 1 2.8-2.4 1.8-.9 2.9-3-.2L12 21l-2.4-1.8-3 .2-.9-2.9-2.4-1.8 1-2.8-1-2.8 2.4-1.8.9-2.9 3 .2z"/><path d="M8.5 12l2.5 2.5 4.5-5"/></svg>`;
+const trustBadge = (p, big) => (isTrusted(p) ? `<span class="trust ${big ? "big" : ""}" title="Vendedor confiable">${TRUST_SVG}${big ? "Vendedor confiable" : "Confiable"}</span>` : "");
 const TOWNS = ["Adjuntas","Aguada","Aguadilla","Aguas Buenas","Aibonito","Añasco","Arecibo","Arroyo","Barceloneta","Barranquitas","Bayamón","Cabo Rojo","Caguas","Camuy","Canóvanas","Carolina","Cataño","Cayey","Ceiba","Ciales","Cidra","Coamo","Comerío","Corozal","Culebra","Dorado","Fajardo","Florida","Guánica","Guayama","Guayanilla","Guaynabo","Gurabo","Hatillo","Hormigueros","Humacao","Isabela","Jayuya","Juana Díaz","Juncos","Lajas","Lares","Las Marías","Las Piedras","Loíza","Luquillo","Manatí","Maricao","Maunabo","Mayagüez","Moca","Morovis","Naguabo","Naranjito","Orocovis","Patillas","Peñuelas","Ponce","Quebradillas","Rincón","Río Grande","Sabana Grande","Salinas","San Germán","San Juan","San Lorenzo","San Sebastián","Santa Isabel","Toa Alta","Toa Baja","Trujillo Alto","Utuado","Vega Alta","Vega Baja","Vieques","Villalba","Yabucoa","Yauco"];
 const PAYNAME = { apple: "Apple Pay", google: "Google Pay", card: "tarjeta" };
 const LOGO = `<svg viewBox="0 0 60 102" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="4.5" stroke-linecap="round"><path d="M27 35 L22 21"/><path d="M40 35 L45 21"/></g><circle cx="21.5" cy="19" r="5" fill="currentColor"/><circle cx="45.5" cy="19" r="5" fill="currentColor"/><path d="M10 32 V100" fill="none" stroke="currentColor" stroke-width="8"/><circle cx="33" cy="55" r="21" fill="#FF5A4E" stroke="currentColor" stroke-width="8"/><rect x="0" y="97.2" width="22" height="4.8" fill="currentColor"/><rect x="0" y="32" width="10" height="4.8" fill="currentColor"/></svg>`;
@@ -43,8 +48,25 @@ function toast(msg) {
   toast.h = setTimeout(() => (t.hidden = true), 3200);
 }
 const fail = (e) => toast(cleanErr(e));
+/* ---------- protección contra ventas por fuera ---------- */
+// Igual que _offapp_hit en la base de datos. "pago" = siempre bloqueado; "contacto" = solo después de pagar.
+function offAppHit(text) {
+  if (!text || !text.trim()) return null;
+  const n = " " + text.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9@]+/g, " ") + " ";
+  const w = (list) => new RegExp("(^|\\s)(" + list + ")(?=\\s)").test(n);
+  if (w("a ?t ?h|athmovil|venmo|zelle|paypal|cashapp|cash|efectivo|cashito|transferencia") ||
+      w("cash app|ath movil|ath mobile|chavos en mano|por fuera|fuera de la app|fuera del app|fuera de pulguea|sin la app|sin el app|sin pulguea|por el lado|cancelamos y|cancela y te")) return "pago";
+  if (w("whatsapp|whats|wasap|watsap|guasap|telegram|instagram|insta|snapchat|signal|wa me|por privado|al privado|mi numero|mi cel|mi celular|textea|textear|textiame|llamame|escribeme al") ||
+      /(\d[\s().\-_/]*){7,}/.test(text) || /[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/i.test(text) || /[a-z0-9._%+-]+ ?@ ?[a-z0-9-]+ (com|net|org|pr|us)(?=\s)/.test(n)) return "contacto";
+  return null;
+}
+const OFFAPP_MSG = {
+  pago: "En Pulguea no se puede hablar de pagar por fuera (ATH, efectivo, Venmo…). Paga dentro de la app: tu dinero queda protegido y nada de capturas de pantalla falsas.",
+  contacto: "Los teléfonos, correos y redes se pueden compartir después de la compra. Por ahora sigan hablando por aquí.",
+};
 function cleanErr(e) {
-  const m = e?.message || String(e || "Algo salió mal.");
+  const m0 = e?.message || String(e || "Algo salió mal.");
+  const m = m0.replace(/^OFFAPP_[A-Z]+:\s*/, "");
   if (/Invalid login credentials/i.test(m)) return "Correo o contraseña incorrectos.";
   if (/Email not confirmed/i.test(m)) return "Confirma tu correo primero. Revisa tu buzón.";
   if (/User already registered/i.test(m)) return "Ya existe una cuenta con ese correo. Entra con tu contraseña.";
@@ -149,7 +171,7 @@ const cardHTML = (l) => `
       <div class="pic">${l.photos?.[0] ? img(l.photos[0], l.title) : PLACEHOLDER}
         ${l.status !== "active" ? `<span class="badge state">${l.status === "sold" ? "Vendido" : l.status === "reserved" ? "Reservado" : "Quitado"}</span>` : ""}</div>
       <div class="meta"><span class="price">${money(l.price)}</span><span class="incl">${money(withFee(l.price))} incl. ${SHIELD}</span>
-        <span class="small ellip">${[l.size, l.brand || l.subcategory].filter(Boolean).map(esc).join(" · ") || esc(l.town)}</span></div>
+        <span class="small ellip">${[l.size, l.brand || l.subcategory].filter(Boolean).map(esc).join(" · ") || esc(l.town)}</span>${trustBadge(l.seller)}</div>
     </a>
     ${l.status === "active" ? heartBtn(l).replace('class="heart"', 'class="heart" style="bottom:auto;top:calc((100% - 76px) - 40px)"') : ""}
   </div>`;
@@ -305,7 +327,7 @@ async function home(id) {
 }
 
 /* ---------- buscar ---------- */
-const filt = { q: "", path: [], size: "", brand: "", cond: "", town: "", min: "", max: "", sort: "new", mine: null };
+const filt = { q: "", path: [], size: "", brand: "", cond: "", town: "", min: "", max: "", sort: "new", mine: null, trusted: false };
 const SORTS = [["new", "Más recientes"], ["low", "Precio: menor a mayor"], ["high", "Precio: mayor a menor"]];
 async function search(id) {
   const qs = new URLSearchParams(location.hash.split("?")[1] || "");
@@ -318,6 +340,7 @@ async function search(id) {
       chip("cat", filt.path.length ? filt.path.slice(-2).join(" › ") : "Categoría", filt.path.length),
       prefs.sizes.length ? `<button class="chip ${filt.mine ? "on" : ""}" data-f="mine" aria-pressed="${!!filt.mine}">${filt.mine ? "✓ " : ""}Mis tallas</button>` : "",
       groups.length ? chip("size", filt.size ? "Talla " + filt.size : "Talla", filt.size) : "",
+      `<button class="chip ${filt.trusted ? "on" : ""}" data-f="trusted" aria-pressed="${filt.trusted}">${filt.trusted ? "✓ " : ""}Vendedores confiables</button>`,
       chip("brand", filt.brand || "Marca", filt.brand),
       chip("cond", filt.cond || "Estado", filt.cond),
       chip("price", filt.min || filt.max ? `$${filt.min || 0} – ${filt.max ? "$" + filt.max : "más"}` : "Precio", filt.min || filt.max),
@@ -343,6 +366,7 @@ async function search(id) {
     if (filt.size) q = q.eq("size", filt.size);
     else if (filt.mine) q = applyMine(q, { sizes: true });
     if (filt.brand) q = q.eq("brand", filt.brand);
+    if (filt.trusted) q = q.gte("seller.sales_count", TRUST.sales).gte("seller.rating_count", TRUST.reviews).gte("seller.rating_avg", TRUST.stars).eq("seller.strikes", 0);
     if (filt.cond) q = q.eq("cond", filt.cond);
     if (filt.town) q = q.eq("town", filt.town);
     if (filt.min) q = q.gte("price", Number(filt.min));
@@ -368,6 +392,7 @@ async function search(id) {
     if (!f) return;
     if (f === "clear") { Object.assign(filt, { path: [], size: "", brand: "", cond: "", town: "", min: "", max: "", sort: "new" }); load(true); return; }
     if (f === "mine") { filt.mine = !filt.mine; load(true); return; }
+    if (f === "trusted") { filt.trusted = !filt.trusted; load(true); return; }
     if (f === "cat") pickCategory(filt.path, true, (path) => { filt.path = path; filt.size = ""; load(true); });
     if (f === "size") pickSize(sizeGroupsFor(filt.path), filt.size, (v) => { filt.size = v; load(true); }, true);
     if (f === "brand") pickBrand(filt.brand, (v) => { filt.brand = v; load(true); }, true);
@@ -498,7 +523,7 @@ function pickMaterial(cur, done) {
 /* ---------- artículo ---------- */
 async function item(lid, id) {
   app.innerHTML = `<div class="skel" style="aspect-ratio:4/5;margin-inline:-16px;border-radius:0"></div><div class="skel" style="height:120px;margin-top:12px"></div>`;
-  const { data: l, error } = await sb.from("listings").select("*, seller:profiles!listings_seller_id_fkey(id,display_name,town,rating_avg,rating_count,sales_count,vacation)").eq("id", lid).maybeSingle();
+  const { data: l, error } = await sb.from("listings").select("*, seller:profiles!listings_seller_id_fkey(id,display_name,town,rating_avg,rating_count,sales_count,vacation,strikes)").eq("id", lid).maybeSingle();
   if (stale(id)) return;
   if (error) throw error;
   if (!l) { app.innerHTML = `${back("#/")}<div class="empty">Este artículo ya no existe.</div>`; return; }
@@ -526,10 +551,10 @@ async function item(lid, id) {
         ${l.description ? `<div style="white-space:pre-wrap;border-top:1px solid var(--line);padding-top:10px">${esc(l.description)}</div>` : ""}</div>
       <div class="panel">
         <a class="seller" href="#/u/${s.id}"><div class="avatar">${initial(s.display_name)}</div>
-          <div style="flex:1;min-width:0"><b>${esc(s.display_name)}</b><div class="small">${s.rating_count ? "★ " + Number(s.rating_avg).toFixed(1) + " (" + s.rating_count + ")" : "Sin reseñas todavía"} · ${s.sales_count || 0} ventas${s.town ? " · " + esc(s.town) : ""}</div></div>${CHEV}</a>
+          <div style="flex:1;min-width:0"><b>${esc(s.display_name)}</b> ${trustBadge(s, true)}<div class="small">${s.rating_count ? "★ " + Number(s.rating_avg).toFixed(1) + " (" + s.rating_count + ")" : "Sin reseñas todavía"} · ${s.sales_count || 0} ventas${s.town ? " · " + esc(s.town) : ""}</div></div>${CHEV}</a>
         ${!mine && l.status === "active" ? `<button class="btn ghost small" data-act="msg">Preguntar al vendedor</button>` : ""}
       </div>
-      <div class="hl"><b>Protección al Comprador</b><span class="small" style="color:var(--ink)">Pagas en la app. El vendedor solo cobra cuando confirmas la entrega con tu código. Si no es como se describe, te devolvemos tu dinero.</span></div>
+      <div class="hl"><b>Protección al Comprador</b><span class="small" style="color:var(--ink)">Pagas en la app. El vendedor solo cobra cuando confirmas la entrega con tu código. Si no es como se describe, te devolvemos tu dinero. Si pagas por fuera (ATH, efectivo), pierdes esta protección.</span></div>
       ${mine ? `<div class="btns"><a class="btn ghost small" href="#/editar/${l.id}">Editar</a>${l.status === "active" ? `<button class="btn ghost small" data-act="remove">Quitar de la venta</button>` : ""}</div>` : ""}
       ${more?.length ? `<div class="row"><h3 style="font-size:17px">Más de ${esc(s.display_name)}</h3>${!mine ? `<a class="small" href="#/lote/${s.id}?first=${l.status === "active" ? l.id : ""}">Armar lote ›</a>` : ""}</div><div class="grid">${more.map(cardHTML).join("")}</div>` : ""}
     </div>`;
@@ -757,7 +782,7 @@ async function sellForm(editId, id) {
       <div class="dropzone ${v.photos.length || uploading ? "has" : ""}" id="photos"></div>
       <h3 class="sh">Sobre tu artículo</h3>
       <div class="field"><label for="f-title">Título</label><input id="f-title" maxlength="80" placeholder="Dile a los compradores qué vendes" value="${esc(v.title)}"></div>
-      <div class="field"><label for="f-desc">Descripción</label><textarea id="f-desc" maxlength="1000" rows="5" placeholder="Cuéntales más: cómo te queda, si tiene algún detalle…">${esc(v.description || "")}</textarea></div>
+      <div class="field"><label for="f-desc">Descripción</label><textarea id="f-desc" maxlength="1000" rows="5" placeholder="Cuéntales más: cómo te queda, si tiene algún detalle…">${esc(v.description || "")}</textarea><span class="small">No pongas teléfonos, redes ni formas de pago por fuera. Todo se cuadra por el chat de Pulguea y cobras seguro, sin capturas falsas.</span></div>
       <h3 class="sh">Detalles del artículo</h3>
       <div class="vrows">
         ${vrow("cat", "Categoría", hasPath() ? v.cat_path[v.cat_path.length - 1] : "")}
@@ -837,7 +862,7 @@ async function sellForm(editId, id) {
     const err = $("#err");
     const groups = hasPath() ? sizeGroupsFor(v.cat_path) : [];
     const price = parseFloat(v.price);
-    const miss = uploading ? "Espera a que terminen de subir las fotos." : !v.photos.length ? "Añade al menos una foto." : v.title.trim().length < 3 ? "Escribe un título (3 letras o más)." : !hasPath() ? "Escoge la categoría." : groups.length && !v.size ? "Escoge la talla." : !v.cond ? "Escoge el estado." : !(price >= 1) ? "Ponle precio (de $1 en adelante)." : !v.town ? "Escoge tu ubicación." : "";
+    const miss = uploading ? "Espera a que terminen de subir las fotos." : !v.photos.length ? "Añade al menos una foto." : v.title.trim().length < 3 ? "Escribe un título (3 letras o más)." : !hasPath() ? "Escoge la categoría." : groups.length && !v.size ? "Escoge la talla." : !v.cond ? "Escoge el estado." : offAppHit(v.title) || offAppHit(v.description) ? "Quita del título o la descripción los teléfonos, redes o formas de pago por fuera (ATH, efectivo…)." : !(price >= 1) ? "Ponle precio (de $1 en adelante)." : !v.town ? "Escoge tu ubicación." : "";
     if (miss) { err.textContent = miss; err.hidden = false; err.scrollIntoView({ behavior: "smooth", block: "center" }); return; }
     err.hidden = true;
     const row = {
@@ -916,7 +941,7 @@ async function chat(tid, id) {
     app.innerHTML = `<div class="top" style="padding-bottom:8px">${back("#/mensajes", "Buzón")}
       <div class="listbtn" style="padding:8px"><a href="#/item/${t.listing?.id}" style="display:contents;color:inherit;text-decoration:none">${thumb(t.listing)}<div style="flex:1;min-width:0"><div class="ellip"><b>${esc(other?.display_name)}</b></div><div class="small ellip">${esc(t.listing?.title || "Artículo")} · ${money(t.listing?.price || 0)}</div></div></a>
       ${openOrder ? `<a class="btn sea small" style="width:auto" href="#/pedido/${openOrder.id}">Ver pedido</a>` : ""}</div></div>
-      <div class="chat" id="chat"><div class="bub sys">Paga siempre dentro de la app y nunca envíes tu código de entrega por mensaje. Para encuentros, escojan un lugar público con gente.</div>${msgs.map(msgHTML).join("")}</div>`;
+      <div class="chat" id="chat"><div class="bub sys">Paga siempre dentro de la app: el vendedor cobra solo cuando escanea tu código, así que no hay capturas de ATH falsas ni efectivo. Nunca envíes tu código por mensaje y escojan un lugar público con gente.</div>${msgs.map(msgHTML).join("")}</div>`;
     window.scrollTo(0, document.body.scrollHeight);
   }
   draw();
@@ -924,13 +949,23 @@ async function chat(tid, id) {
   comp.className = "composer";
   comp.style.bottom = "0";
   comp.style.paddingBottom = "calc(8px + env(safe-area-inset-bottom,0px))";
-  comp.innerHTML = `<form><input id="msgIn" placeholder="Escribe un mensaje…" aria-label="Mensaje" autocomplete="off" maxlength="1000"><button>Enviar</button></form>`;
+  comp.innerHTML = `<div class="offwarn" id="offwarn" hidden></div><form><input id="msgIn" placeholder="Escribe un mensaje…" aria-label="Mensaje" autocomplete="off" maxlength="1000"><button id="msgSend">Enviar</button></form>`;
   document.body.appendChild(comp);
+  const paidHere = () => !!openOrder && ["paid", "shipped", "completed"].includes(openOrder.status);
+  const blockedReason = (txt) => { const h = offAppHit(txt); return h === "pago" || (h === "contacto" && !paidHere()) ? h : null; };
+  $("#msgIn").addEventListener("input", (e) => {
+    const r = blockedReason(e.target.value);
+    const w = $("#offwarn");
+    w.hidden = !r;
+    if (r) w.textContent = OFFAPP_MSG[r];
+    $("#msgSend").disabled = !!r;
+  });
   comp.querySelector("form").onsubmit = async (e) => {
     e.preventDefault();
     const inp = $("#msgIn");
     const body = inp.value.trim();
     if (!body) return;
+    if (blockedReason(body)) return toast(OFFAPP_MSG[blockedReason(body)]);
     inp.value = "";
     const { data, error } = await sb.from("messages").insert({ thread_id: tid, sender_id: uid(), body }).select().single();
     if (error) { inp.value = body; return fail(error); }
@@ -1303,9 +1338,9 @@ async function persMembers(id) {
     <div class="pagehero"><h2>Miembros que sigues</h2><span class="small">Sigue a vendedores que te gustan y verás sus artículos en Inicio › Siguiendo.</span></div>
     <label class="searchbox">${SEARCH}<input id="mq" type="search" placeholder="Busca miembros por nombre" autocomplete="off"></label>
     <div class="flatrows" id="ml" style="margin-top:12px"><div class="skel" style="height:60px;margin:12px 16px"></div></div>`;
-  const row = (p) => `<div class="rowbtn member"><a class="ml" href="#/u/${p.id}" style="color:inherit;text-decoration:none"><div class="avatar">${initial(p.display_name)}</div><span><b>${esc(p.display_name)}</b><small class="small" style="display:block">${p.rating_count ? "★ " + Number(p.rating_avg).toFixed(1) + " · " : ""}${p.sales_count || 0} ventas${p.town ? " · " + esc(p.town) : ""}</small></span></a>${p.id === uid() ? "" : followBtn(p.id)}</div>`;
+  const row = (p) => `<div class="rowbtn member"><a class="ml" href="#/u/${p.id}" style="color:inherit;text-decoration:none"><div class="avatar">${initial(p.display_name)}</div><span><b>${esc(p.display_name)}</b> ${trustBadge(p)}<small class="small" style="display:block">${p.rating_count ? "★ " + Number(p.rating_avg).toFixed(1) + " · " : ""}${p.sales_count || 0} ventas${p.town ? " · " + esc(p.town) : ""}</small></span></a>${p.id === uid() ? "" : followBtn(p.id)}</div>`;
   async function load() {
-    const cols = "id,display_name,town,rating_avg,rating_count,sales_count";
+    const cols = "id,display_name,town,rating_avg,rating_count,sales_count,strikes";
     let data = [];
     if (term.length >= 2) {
       const t = term.replace(/[%,()_\\"]/g, " ").trim();
@@ -1438,6 +1473,7 @@ function vacationSheet(rid) {
 function guideSheet() {
   openSheet("Tu guía de Pulguea", prose(`<p><b>Comprar</b></p><ol><li>Paga en la app con Apple Pay, Google Pay o tarjeta. El dinero queda guardado.</li><li>Coordina por mensaje con el vendedor el lugar y la hora. Escojan un sitio público con gente.</li><li>Revisa el artículo. Si está bien, enséñale tu código al vendedor para que lo escanee.</li></ol>
   <p><b>Vender</b></p><ol><li>Toca Vender, sube fotos y llena los detalles.</li><li>Cuando te compren, coordina el encuentro por mensaje.</li><li>Escanea el código del comprador y cobras al instante.</li></ol>
+  <p><b>Vendedor confiable</b></p><p>Sale con 5 ventas o más dentro de la app, 3 reseñas o más, 4.5 estrellas y ninguna falta. Las ventas por fuera no cuentan.</p>
   <p><b>Lo que cuesta</b></p><p>Vender es gratis. El comprador paga un cargo de Protección al Comprador de 5% + $0.70.</p>
   <p><b>Si alguien no aparece</b></p><p>Si es el vendedor, el comprador recibe todo su dinero y el vendedor recibe una falta. Si es el comprador, recibe el precio de vuelta pero el cargo de servicio va al vendedor por su viaje.</p>`));
 }
@@ -1527,7 +1563,7 @@ async function editProfile(id) {
 async function publicProfile(pid, id) {
   app.innerHTML = `<div class="skel" style="height:200px;margin-top:20px"></div>`;
   const [{ data: p }, { data: ls }, { data: rv }, { count: nFollowers }, { count: nFollowing }] = await Promise.all([
-    sb.from("profiles").select("id,display_name,town,bio,rating_avg,rating_count,sales_count,created_at,vacation").eq("id", pid).maybeSingle(),
+    sb.from("profiles").select("id,display_name,town,bio,rating_avg,rating_count,sales_count,created_at,vacation,strikes").eq("id", pid).maybeSingle(),
     (pid === uid() ? sb.from("listings").select(LIST_COLS).eq("seller_id", pid).neq("status", "removed") : sb.from("listings").select(LIST_COLS).eq("seller_id", pid).eq("status", "active")).order("created_at", { ascending: false }),
     sb.from("reviews").select("stars,comment,created_at, reviewer:profiles!reviews_reviewer_id_fkey(display_name)").eq("reviewee_id", pid).order("created_at", { ascending: false }).limit(20),
     sb.from("follows").select("follower_id", { count: "exact", head: true }).eq("followee_id", pid),
@@ -1540,12 +1576,13 @@ async function publicProfile(pid, id) {
   function draw() {
     app.innerHTML = `${back("javascript:history.back()")}
     <div class="stack">
-      <div class="panel"><div class="seller"><div class="avatar" style="width:56px;height:56px;font-size:22px">${initial(p.display_name)}</div><div><b style="font-size:18px">${esc(p.display_name)}</b>
+      <div class="panel"><div class="seller"><div class="avatar" style="width:56px;height:56px;font-size:22px">${initial(p.display_name)}</div><div><b style="font-size:18px">${esc(p.display_name)}</b> ${trustBadge(p, true)}
         <div class="small">${p.rating_count ? "★ " + Number(p.rating_avg).toFixed(1) + " (" + p.rating_count + " reseñas)" : "Sin reseñas todavía"} · ${p.sales_count} ventas${p.town ? " · " + esc(p.town) : ""}</div></div></div>
         ${p.bio ? `<div style="white-space:pre-wrap">${esc(p.bio)}</div>` : ""}
         <div class="small"><b style="color:var(--ink)">${followers}</b> seguidor${followers === 1 ? "" : "es"} · <b style="color:var(--ink)">${nFollowing || 0}</b> siguiendo</div>
         ${pid !== uid() ? followBtn(pid) : ""}
         <div class="small">En Pulguea desde ${new Intl.DateTimeFormat("es-PR", { month: "long", year: "numeric" }).format(new Date(p.created_at))}</div>
+        ${pid === uid() && !isTrusted(p) ? `<div class="trustprog"><b>${TRUST_SVG} Hazte Vendedor confiable</b><span class="small">Te faltan: ${[p.sales_count < TRUST.sales ? `${TRUST.sales - p.sales_count} venta${TRUST.sales - p.sales_count === 1 ? "" : "s"} en la app` : "", p.rating_count < TRUST.reviews ? `${TRUST.reviews - p.rating_count} reseña${TRUST.reviews - p.rating_count === 1 ? "" : "s"}` : "", p.rating_count >= TRUST.reviews && Number(p.rating_avg) < TRUST.stars ? "subir tus estrellas a 4.5" : "", p.strikes ? "no tener faltas" : ""].filter(Boolean).join(", ")}. Solo cuentan las ventas pagadas dentro de Pulguea.</span></div>` : ""}
         ${p.vacation ? `<div class="hl"><span class="small" style="color:var(--ink)">De vacaciones: no está vendiendo por ahora.</span></div>` : ""}
         ${pid === uid() ? `<div class="btns"><a class="btn ghost small" href="#/perfil/editar">Editar perfil</a><a class="btn primary small" href="#/vender">Subir artículo</a></div>` : ""}
         ${ls.length > 1 && pid !== uid() && !p.vacation ? `<a class="btn ghost small" href="#/lote/${pid}">Armar un lote (10% menos)</a>` : ""}</div>

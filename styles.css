@@ -261,3 +261,14 @@ em.rec{display:inline-block;font-style:normal;font-size:11px;font-weight:700;col
 .rowbtn.member{gap:12px}
 .rowbtn.member .ml{flex:1;min-width:0}
 .rowbtn.member .btn{width:auto;flex:none;padding:8px 14px}
+/* vendedor confiable y avisos de ventas por fuera */
+.trust{display:inline-flex;align-items:center;gap:3px;font-size:11px;font-weight:700;color:var(--ok);vertical-align:1px}
+.trust.big{font-size:12px;background:var(--ok-soft);border-radius:999px;padding:2px 8px 2px 6px}
+.trust svg{flex:none}
+.trustprog{background:var(--ok-soft);border-radius:12px;padding:10px 12px;display:grid;gap:2px}
+.trustprog b{display:flex;align-items:center;gap:6px;color:var(--ok);font-size:14px}
+.trustprog .small{color:var(--ink)}
+.offwarn{background:var(--flame-soft);color:var(--ink);font-size:13px;line-height:1.4;padding:8px 12px;border-radius:10px;margin:0 0 8px}
+.composer button:disabled{opacity:.4}
+.composer{flex-direction:column;align-items:center}
+.composer .offwarn{width:100%;max-width:488px}
