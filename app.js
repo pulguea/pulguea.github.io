@@ -88,6 +88,24 @@ async function loadPrefs() {
   const { data } = await sb.from("user_prefs").select("genders,sizes,brands").eq("user_id", uid()).maybeSingle();
   if (data) prefs = data;
 }
+let following = new Set();
+async function loadFollowing() {
+  following = new Set();
+  if (!session) return;
+  const { data } = await sb.from("follows").select("followee_id").eq("follower_id", uid()).limit(1000);
+  (data || []).forEach((f) => following.add(f.followee_id));
+}
+async function toggleFollow(pid) {
+  if (needLogin()) return false;
+  const on = following.has(pid);
+  following[on ? "delete" : "add"](pid);
+  const { error } = on
+    ? await sb.from("follows").delete().eq("follower_id", uid()).eq("followee_id", pid)
+    : await sb.from("follows").insert({ follower_id: uid(), followee_id: pid });
+  if (error) { following[on ? "add" : "delete"](pid); fail(error); return on; }
+  return !on;
+}
+const followBtn = (pid) => `<button class="btn ${following.has(pid) ? "ghost" : "primary"} small" data-follow="${pid}">${following.has(pid) ? "Siguiendo" : "Seguir"}</button>`;
 async function savePrefs() {
   const { error } = await sb.from("user_prefs").upsert({ user_id: uid(), ...prefs, updated_at: new Date().toISOString() });
   if (error) fail(error);
@@ -209,6 +227,7 @@ const routes = [
   [/^#\/personalizar\/tallas$/, persSizes, true],
   [/^#\/personalizar\/tallas\/(\w+)$/, persSizeGroup, true],
   [/^#\/personalizar\/marcas$/, persBrands, true],
+  [/^#\/personalizar\/miembros$/, persMembers, true],
   [/^#\/ajustes$/, settings],
   [/^#\/u\/([\w-]+)$/, publicProfile],
   [/^#\/entrar$/, auth],
@@ -253,9 +272,9 @@ async function home(id) {
   if (homeSection === null) homeSection = hasPrefs() ? "parati" : "";
   app.innerHTML = header(`
     <a class="searchbox" href="#/buscar">${SEARCH}<span>Buscar artículos o marcas</span></a>
-    <div class="tabsline" id="secs">${hasPrefs() ? `<button data-s="parati" aria-pressed="${homeSection === "parati"}">Para ti</button>` : ""}<button data-s="" aria-pressed="${!homeSection}">Todo</button>${SECTIONS.map((s) => `<button data-s="${s.k}" aria-pressed="${homeSection === s.k}">${s.n}</button>`).join("")}</div>`) + `
+    <div class="tabsline" id="secs">${following.size ? `<button data-s="siguiendo" aria-pressed="${homeSection === "siguiendo"}">Siguiendo</button>` : ""}${hasPrefs() ? `<button data-s="parati" aria-pressed="${homeSection === "parati"}">Para ti</button>` : ""}<button data-s="" aria-pressed="${!homeSection}">Todo</button>${SECTIONS.map((s) => `<button data-s="${s.k}" aria-pressed="${homeSection === s.k}">${s.n}</button>`).join("")}</div>`) + `
     <div class="banner"><div>Recógelo <b>hoy</b> en persona. Pagas en la app y el vendedor solo cobra cuando escanea tu código.</div></div>
-    <div class="row" style="margin-bottom:10px"><h3 style="font-size:18px">${homeSection === "parati" ? "Para ti" : "Novedades"}</h3>${homeSection === "parati" ? `<a class="small" href="#/personalizar">Ajustar ›</a>` : homeSection ? `<a class="small" href="#/buscar?s=${homeSection}">Filtrar ›</a>` : ""}</div>
+    <div class="row" style="margin-bottom:10px"><h3 style="font-size:18px">${homeSection === "parati" ? "Para ti" : homeSection === "siguiendo" ? "De quienes sigues" : "Novedades"}</h3>${homeSection === "parati" ? `<a class="small" href="#/personalizar">Ajustar ›</a>` : homeSection === "siguiendo" ? `<a class="small" href="#/personalizar/miembros">Ver miembros ›</a>` : homeSection ? `<a class="small" href="#/buscar?s=${homeSection}">Filtrar ›</a>` : ""}</div>
     <div class="grid" id="feed">${skelGrid()}</div>
     <div style="padding-top:14px"><button class="btn ghost" id="more" hidden>Ver más</button></div>`;
   let page = 0;
@@ -263,7 +282,8 @@ async function home(id) {
   async function load(reset) {
     if (reset) { page = 0; $("#feed").innerHTML = skelGrid(); }
     let q = sb.from("listings").select(FEED_COLS).eq("status", "active").eq("seller.vacation", false).order("created_at", { ascending: false }).range(page * PAGE, page * PAGE + PAGE - 1);
-    if (homeSection === "parati") q = applyMine(q, { sizes: true, genders: true, brands: prefs.brands.length && !prefs.genders.length && !prefs.sizes.length });
+    if (homeSection === "siguiendo") q = q.in("seller_id", [...following]);
+    else if (homeSection === "parati") q = applyMine(q, { sizes: true, genders: true, brands: prefs.brands.length && !prefs.genders.length && !prefs.sizes.length });
     else if (homeSection) q = q.eq("section", homeSection);
     const { data, error } = await q;
     if (stale(id)) return;
@@ -1274,6 +1294,38 @@ function promoSheet() {
     });
 }
 /* ---------- Personalización (como Vinted) ---------- */
+async function persMembers(id) {
+  if (needLogin()) return;
+  let term = "";
+  app.innerHTML = `${pagehead("#/personalizar", "Miembros")}
+    <div class="pagehero"><h2>Miembros que sigues</h2><span class="small">Sigue a vendedores que te gustan y verás sus artículos en Inicio › Siguiendo.</span></div>
+    <label class="searchbox">${SEARCH}<input id="mq" type="search" placeholder="Busca miembros por nombre" autocomplete="off"></label>
+    <div class="flatrows" id="ml" style="margin-top:12px"><div class="skel" style="height:60px;margin:12px 16px"></div></div>`;
+  const row = (p) => `<div class="rowbtn member"><a class="ml" href="#/u/${p.id}" style="color:inherit;text-decoration:none"><div class="avatar">${initial(p.display_name)}</div><span><b>${esc(p.display_name)}</b><small class="small" style="display:block">${p.rating_count ? "★ " + Number(p.rating_avg).toFixed(1) + " · " : ""}${p.sales_count || 0} ventas${p.town ? " · " + esc(p.town) : ""}</small></span></a>${p.id === uid() ? "" : followBtn(p.id)}</div>`;
+  async function load() {
+    const cols = "id,display_name,town,rating_avg,rating_count,sales_count";
+    let data = [];
+    if (term.length >= 2) {
+      const t = term.replace(/[%,()_\\"]/g, " ").trim();
+      ({ data } = await sb.from("profiles").select(cols).ilike("display_name", `%${t}%`).neq("id", uid()).limit(30));
+    } else if (following.size) {
+      ({ data } = await sb.from("profiles").select(cols).in("id", [...following]).limit(200));
+    }
+    if (stale(id)) return;
+    $("#ml").innerHTML = (data || []).map(row).join("") || `<div class="empty">${term.length >= 2 ? "No encontramos a nadie con ese nombre." : "Todavía no sigues a nadie. Busca por nombre o toca Seguir en el perfil de un vendedor."}</div>`;
+  }
+  let deb;
+  app.oninput = (e) => { if (e.target.id === "mq") { clearTimeout(deb); deb = setTimeout(() => { term = e.target.value.trim(); load(); }, 300); } };
+  app.onclick = async (e) => {
+    const f = e.target.closest("[data-follow]");
+    if (!f) return;
+    f.disabled = true;
+    const on = await toggleFollow(f.dataset.follow);
+    f.outerHTML = followBtn(f.dataset.follow);
+    if (on) toast("Siguiendo.");
+  };
+  await load();
+}
 const GENDERS = [["mujer", "Mujer", '<path d="M9 3v3l-2 4v11h10V10l-2-4V3"/><path d="M9 6h6"/>'], ["hombre", "Hombre", '<path d="M8 3l-5 3 2 5 3-1v11h8V10l3 1 2-5-5-3a4 4 0 0 1-8 0z"/>'], ["ninos", "Niños", '<circle cx="12" cy="13" r="8"/><path d="M9 13h.01M15 13h.01M9.5 16.5a3.5 3.5 0 0 0 5 0M12 5c0-1.5 1-2 2-2"/>']];
 const pagehead = (backTo, title) => `<div class="sellhead"><a class="iconbtn" href="${backTo}" aria-label="Volver">‹</a><b>${esc(title)}</b><span></span></div>`;
 const checkbox = (on) => `<span class="cbox ${on ? "on" : ""}" aria-hidden="true">${on ? "✓" : ""}</span>`;
@@ -1284,6 +1336,7 @@ async function persMain(id) {
     <div class="pagehero"><h2>Ve solo lo que te queda</h2><span class="small">Escoge las categorías, tallas y marcas que quieres ver primero en tu Inicio y en Buscar.</span></div>
     <div class="flatrows">
       <a class="rowbtn" href="#/personalizar/tallas"><span>Categorías y tallas</span><span class="mr"><span class="val">${esc(prefs.genders.map(sectionName).join(", "))}</span>${CHEV}</span></a>
+      <a class="rowbtn" href="#/personalizar/miembros"><span>Miembros</span><span class="mr"><span class="val">${following.size ? following.size + " siguiendo" : ""}</span>${CHEV}</span></a>
       <a class="rowbtn" href="#/personalizar/marcas"><span>Marcas</span><span class="mr"><span class="val">${esc(prefs.brands.slice(0, 3).join(", "))}${prefs.brands.length > 3 ? "…" : ""}</span>${CHEV}</span></a>
     </div>
     ${hasPrefs() ? `<div style="padding:16px 0"><a class="btn ghost" href="#/" data-pt>Ver “Para ti” en Inicio</a></div>` : ""}`;
@@ -1471,11 +1524,14 @@ async function editProfile(id) {
 
 async function publicProfile(pid, id) {
   app.innerHTML = `<div class="skel" style="height:200px;margin-top:20px"></div>`;
-  const [{ data: p }, { data: ls }, { data: rv }] = await Promise.all([
+  const [{ data: p }, { data: ls }, { data: rv }, { count: nFollowers }, { count: nFollowing }] = await Promise.all([
     sb.from("profiles").select("id,display_name,town,bio,rating_avg,rating_count,sales_count,created_at,vacation").eq("id", pid).maybeSingle(),
     (pid === uid() ? sb.from("listings").select(LIST_COLS).eq("seller_id", pid).neq("status", "removed") : sb.from("listings").select(LIST_COLS).eq("seller_id", pid).eq("status", "active")).order("created_at", { ascending: false }),
     sb.from("reviews").select("stars,comment,created_at, reviewer:profiles!reviews_reviewer_id_fkey(display_name)").eq("reviewee_id", pid).order("created_at", { ascending: false }).limit(20),
+    sb.from("follows").select("follower_id", { count: "exact", head: true }).eq("followee_id", pid),
+    sb.from("follows").select("followee_id", { count: "exact", head: true }).eq("follower_id", pid),
   ]);
+  let followers = nFollowers || 0;
   if (stale(id)) return;
   if (!p) { app.innerHTML = `${back("#/")}<div class="empty">Perfil no encontrado.</div>`; return; }
   let tab = "items";
@@ -1485,6 +1541,8 @@ async function publicProfile(pid, id) {
       <div class="panel"><div class="seller"><div class="avatar" style="width:56px;height:56px;font-size:22px">${initial(p.display_name)}</div><div><b style="font-size:18px">${esc(p.display_name)}</b>
         <div class="small">${p.rating_count ? "★ " + Number(p.rating_avg).toFixed(1) + " (" + p.rating_count + " reseñas)" : "Sin reseñas todavía"} · ${p.sales_count} ventas${p.town ? " · " + esc(p.town) : ""}</div></div></div>
         ${p.bio ? `<div style="white-space:pre-wrap">${esc(p.bio)}</div>` : ""}
+        <div class="small"><b style="color:var(--ink)">${followers}</b> seguidor${followers === 1 ? "" : "es"} · <b style="color:var(--ink)">${nFollowing || 0}</b> siguiendo</div>
+        ${pid !== uid() ? followBtn(pid) : ""}
         <div class="small">En Pulguea desde ${new Intl.DateTimeFormat("es-PR", { month: "long", year: "numeric" }).format(new Date(p.created_at))}</div>
         ${p.vacation ? `<div class="hl"><span class="small" style="color:var(--ink)">De vacaciones: no está vendiendo por ahora.</span></div>` : ""}
         ${pid === uid() ? `<div class="btns"><a class="btn ghost small" href="#/perfil/editar">Editar perfil</a><a class="btn primary small" href="#/vender">Subir artículo</a></div>` : ""}
@@ -1495,7 +1553,12 @@ async function publicProfile(pid, id) {
     </div>`;
   }
   draw();
-  app.onclick = (e) => { if (bindFavs(e)) return; const t = e.target.closest("[data-t]"); if (t) { tab = t.dataset.t; draw(); } };
+  app.onclick = async (e) => {
+    if (bindFavs(e)) return;
+    const f = e.target.closest("[data-follow]");
+    if (f) { f.disabled = true; const before = following.has(pid); const now = await toggleFollow(pid); if (now !== before) followers += now ? 1 : -1; draw(); if (now && !before) toast(`Ahora sigues a ${p.display_name}.`); return; }
+    const t = e.target.closest("[data-t]"); if (t) { tab = t.dataset.t; draw(); }
+  };
 }
 
 /* ---------- entrar ---------- */
@@ -1576,13 +1639,13 @@ async function newPassword() {
 (async () => {
   const { data } = await sb.auth.getSession();
   session = data.session;
-  await Promise.all([loadMe(), loadFavs(), loadPrefs()]);
+  await Promise.all([loadMe(), loadFavs(), loadPrefs(), loadFollowing()]);
   let recovering = false;
   sb.auth.onAuthStateChange((ev, s) => {
     const had = !!session;
     session = s;
     if (ev === "PASSWORD_RECOVERY") { recovering = true; loadMe().then(() => (location.hash = "#/clave")); return; }
-    if (had !== !!s) Promise.all([loadMe(), loadFavs(), loadPrefs()]).then(() => { if (!recovering) route(); });
+    if (had !== !!s) Promise.all([loadMe(), loadFavs(), loadPrefs(), loadFollowing()]).then(() => { if (!recovering) route(); });
   });
   window.addEventListener("hashchange", route);
   route();

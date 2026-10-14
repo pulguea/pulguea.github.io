@@ -258,3 +258,6 @@ em.rec{display:inline-block;font-style:normal;font-size:11px;font-weight:700;col
 .mi.accent{color:var(--sea)}
 [hidden]{display:none!important}
 .sheetnav .iconbtn{display:inline-flex;align-items:center;gap:2px;border-radius:6px}
+.rowbtn.member{gap:12px}
+.rowbtn.member .ml{flex:1;min-width:0}
+.rowbtn.member .btn{width:auto;flex:none;padding:8px 14px}
