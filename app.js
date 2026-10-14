@@ -14,6 +14,7 @@ const r2 = (n) => Math.round(n * 100 + 1e-6) / 100;
 const money = (n) => "$" + Number(n).toFixed(2);
 const fee = (p) => r2(Number(p) * 0.05 + 0.7);
 const withFee = (p) => r2(Number(p) + fee(p));
+const SHIPPING_ON = false; // envío por correo apagado hasta conectar etiquetas reales (Shippo/EasyPost)
 const shipFor = (code) => (PARCELS.find((x) => x[0] === code) || PARCELS[1])[3];
 const EDIT = `<svg class="chev" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M14 6l4 4"/></svg>`;
 const PLUS = `<svg class="chev" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>`;
@@ -648,7 +649,8 @@ async function checkout(id) {
       <div class="listbtn">${thumb(list[0])}<div style="flex:1;min-width:0"><div class="ellip"><b>${esc(title)}</b></div><div class="small">${list.length > 1 ? list.map((x) => esc(x.title)).join(", ") : [list[0].size, list[0].brand].filter(Boolean).map(esc).join(" · ")}</div></div></div>
       <span class="label">Entrega</span>
       <button class="opt" data-mode="meet" aria-pressed="${st.mode === "meet"}"><div class="row"><b>Encuentro en persona</b><span class="small">Gratis</span></div><span class="small">Después de pagar, coordinan el lugar y la hora por mensaje. Recomendamos un lugar público.</span></button>
-      <button class="opt" data-mode="ship" aria-pressed="${st.mode === "ship"}"><div class="row"><b>Envío por correo</b><span class="small">${money(SHIP)}</span></div><span class="small">Llega en 2 o 3 días a tu dirección.</span></button>
+      ${SHIPPING_ON ? "" : `<span class="small">Envío por correo: muy pronto.</span>`}
+      ${!SHIPPING_ON ? "" : `<button class="opt" data-mode="ship" aria-pressed="${st.mode === "ship"}"><div class="row"><b>Envío por correo</b><span class="small">${money(SHIP)}</span></div><span class="small">Llega en 2 o 3 días a tu dirección.</span></button>`}
       ${st.mode === "ship" ? `<div class="field"><label for="addr">Dirección de envío</label><textarea id="addr" placeholder="Calle, número, urbanización, pueblo y código postal">${esc(st.address)}</textarea></div>` : ""}
       <span class="label">Forma de pago</span>
       <div class="rows">${["apple", "google", "card"].map((p) => `<button class="optrow" style="padding-inline:14px" data-pay="${p}" aria-pressed="${st.pay === p}">${p === "card" ? "Tarjeta de crédito o débito" : PAYNAME[p]}<span class="radio"></span></button>`).join("")}</div>
@@ -746,10 +748,10 @@ async function sellForm(editId, id) {
       <h3 class="sh">Precio</h3>
       <div class="vrows">${vrow("price", "Precio", Number(v.price) >= 1 ? money(v.price) : "")}</div>
       <h3 class="sh">Entrega</h3>
-      <span class="small">Puedes entregar en persona o enviarlo por correo. El comprador siempre paga el envío.</span>
+      <span class="small">${SHIPPING_ON ? "Puedes entregar en persona o enviarlo por correo. El comprador siempre paga el envío." : "Las ventas se entregan en persona. Después de la compra coordinan el lugar y la hora por mensaje."}</span>
       <div class="vrows">
         ${vrow("town", "Ubicación", v.town)}
-        ${vrow("parcel", "Tamaño del paquete", parcel[1])}
+        ${SHIPPING_ON ? vrow("parcel", "Tamaño del paquete", parcel[1]) : ""}
       </div>
       <p class="err" id="err" hidden></p>
       <button class="btn primary" id="save">${editId ? "Guardar cambios" : "Subir"}</button>
@@ -1386,7 +1388,7 @@ function guideSheet() {
 }
 function helpSheet() {
   const faq = [
-    ["¿Cuándo recibe el dinero el vendedor?", "En el momento en que escanea el código del comprador durante la entrega. Si es por correo, cuando el comprador confirma que lo recibió."],
+    ["¿Cuándo recibe el dinero el vendedor?", "En el momento en que escanea el código del comprador durante la entrega en persona."],
     ["¿Qué pasa si el artículo no es como se describe?", "No le enseñes tu código al vendedor. Cancela el pedido desde la página del pedido y recibes tu dinero de vuelta."],
     ["¿Dónde nos encontramos?", "Lo coordinan por mensaje. Recomendamos un lugar público con gente, como un centro comercial o una farmacia, de día."],
     ["¿Cómo hago una oferta?", "En el artículo toca “Hacer una oferta”. El vendedor puede aceptar, rechazar o contraofertar."],
