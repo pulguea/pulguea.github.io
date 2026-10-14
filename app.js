@@ -1611,7 +1611,8 @@ async function auth() {
         if (!data.session) {
           $("#af").hidden = true;
           $("#sent").hidden = false;
-          $("#senttext").textContent = `Te enviamos un enlace a ${mail} para confirmar tu cuenta. Ábrelo desde este mismo teléfono y luego entra con tu contraseña.`;
+          $("#senttext").innerHTML = `Te enviamos un correo a <b>${esc(mail)}</b>. Toca el botón <b>Confirmar mi cuenta</b> y listo. Si no lo ves, busca en Spam o Promociones.<br><br><button type="button" class="btn ghost small" id="resend">Enviar el correo otra vez</button>`;
+          $("#resend").onclick = (ev) => busy(ev.target, async () => { const { error } = await sb.auth.resend({ type: "signup", email: mail, options: { emailRedirectTo: location.origin + location.pathname } }); if (error) throw error; toast("Te lo enviamos otra vez."); });
           return;
         }
       } else {
@@ -1657,6 +1658,7 @@ async function newPassword() {
   const fromRecovery = /type=recovery/.test(START_HASH);
   const linkErr = /error_description=([^&]+)/.exec(START_HASH);
   if (fromRecovery && session) history.replaceState(null, "", location.pathname + "#/clave");
+  else if (/type=signup/.test(START_HASH) && session) { history.replaceState(null, "", location.pathname + "#/"); setTimeout(() => toast("¡Cuenta confirmada! Bienvenido al pulguero de bolsillo."), 400); }
   else if (linkErr) {
     history.replaceState(null, "", location.pathname + "#/entrar");
     setTimeout(() => toast(/expired|invalid/i.test(decodeURIComponent(linkErr[1])) ? "Ese enlace ya expiró o ya se usó. Pide otro desde Entrar." : "No se pudo abrir el enlace. Pide otro desde Entrar."), 300);
